@@ -15,8 +15,9 @@ const HeroSection = ({ onPrimaryAction, onContactAction }) => {
       className="relative px-6 pb-20 pt-36 sm:pt-40 lg:px-8 lg:pb-28"
       style={{ overflow: "clip" }}
     >
-      <div className="absolute inset-0 -z-20 bg-[radial-gradient(circle_at_20%_5%,rgba(78,212,255,0.2),transparent_38%),radial-gradient(circle_at_86%_18%,rgba(249,115,91,0.16),transparent_30%),linear-gradient(180deg,rgba(5,10,23,0.98)_0%,rgba(3,7,17,0.92)_100%)]" />
-      <div className="absolute inset-x-0 top-0 -z-10 h-px bg-gradient-to-r from-transparent via-cyan-100/30 to-transparent" />
+      {/* Am adăugat transform-gpu will-change-transform pentru accelerare hardware pe blur/gradient */}
+      <div className="absolute inset-0 -z-20 transform-gpu will-change-transform bg-[radial-gradient(circle_at_20%_5%,rgba(78,212,255,0.2),transparent_38%),radial-gradient(circle_at_86%_18%,rgba(249,115,91,0.16),transparent_30%),linear-gradient(180deg,rgba(5,10,23,0.98)_0%,rgba(3,7,17,0.92)_100%)]" />
+      <div className="absolute inset-x-0 top-0 -z-10 h-px transform-gpu will-change-transform bg-gradient-to-r from-transparent via-cyan-100/30 to-transparent" />
 
       <div className="mx-auto grid w-full max-w-6xl items-center gap-8 lg:grid-cols-2">
         {/* Text */}

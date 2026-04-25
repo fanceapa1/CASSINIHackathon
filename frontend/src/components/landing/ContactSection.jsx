@@ -4,7 +4,13 @@ import ScrambleTitle from "./ScrambleTitle";
 
 const ContactSection = ({ sectionRef }) => {
   const localRef = useRef(null);
-  const isInView = useInView(localRef, { amount: 0.32, margin: "-8% 0px" });
+  
+  // Am scos 'once: true'
+  const isInView = useInView(localRef, { 
+      amount: 0.2, 
+      margin: "0px" 
+  });
+  
   const [status, setStatus] = useState("");
 
   const handleSubmit = async (event) => {
@@ -71,54 +77,29 @@ const ContactSection = ({ sectionRef }) => {
           transition={{ duration: 0.65, delay: 0.08 }}
           className="rounded-[24px] border border-cyan-100/20 bg-[#071328]/80 p-6 shadow-[0_28px_60px_-38px_rgba(0,0,0,0.92)] backdrop-blur sm:p-8 will-change-transform"
         >
+          {/* ... continutul formularului ramane la fel ... */}
           <div className="grid gap-5">
             <label className="font-body text-sm font-semibold text-slate-200">
               Nume
-              <input
-                type="text"
-                name="name"
-                required
-                placeholder="Numele tau"
-                className="mt-2 w-full rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60"
-              />
+              <input type="text" name="name" required placeholder="Numele tau" className="mt-2 w-full rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60" />
             </label>
 
             <label className="font-body text-sm font-semibold text-slate-200">
               Email
-              <input
-                type="email"
-                name="email"
-                required
-                placeholder="nume@companie.ro"
-                className="mt-2 w-full rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60"
-              />
+              <input type="email" name="email" required placeholder="nume@companie.ro" className="mt-2 w-full rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60" />
             </label>
 
             <label className="font-body text-sm font-semibold text-slate-200">
               Mesaj
-              <textarea
-                name="message"
-                required
-                rows={5}
-                placeholder="Spune-ne pe scurt ce tip de suport sau oferta cauti."
-                className="mt-2 w-full resize-none rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60"
-              />
+              <textarea name="message" required rows={5} placeholder="Spune-ne pe scurt ce tip de suport sau oferta cauti." className="mt-2 w-full resize-none rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60" />
             </label>
 
-            <button
-              type="submit"
-              className="rounded-full bg-cyan-300 px-6 py-3 font-body text-sm font-bold uppercase tracking-[0.08em] text-slate-950 transition hover:bg-cyan-200 sm:text-base disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={status === "Se trimite..."}
-            >
+            <button type="submit" className="rounded-full bg-cyan-300 px-6 py-3 font-body text-sm font-bold uppercase tracking-[0.08em] text-slate-950 transition hover:bg-cyan-200 sm:text-base disabled:cursor-not-allowed disabled:opacity-50" disabled={status === "Se trimite..."}>
               {status === "Se trimite..." ? "Se trimite..." : "Trimite Mesaj"}
             </button>
 
             {status && status !== "Se trimite..." && (
-              <p
-                className={`font-body text-sm font-semibold ${
-                  status.includes("succes") ? "text-green-400" : "text-red-400"
-                }`}
-              >
+              <p className={`font-body text-sm font-semibold ${status.includes("succes") ? "text-green-400" : "text-red-400"}`}>
                 {status}
               </p>
             )}
