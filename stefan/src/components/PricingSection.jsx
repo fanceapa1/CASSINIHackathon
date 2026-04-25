@@ -1,11 +1,10 @@
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-import { useScrambleText } from "../hooks/useScrambleText";
+import ScrambleTitle from "./ScrambleTitle";
 
 const PricingSection = ({ onContactClick }) => {
   const sectionRef = useRef(null);
   const isInView = useInView(sectionRef, { amount: 0.35, margin: "-14% 0px" });
-  const title = useScrambleText("Pricing", isInView, 480);
 
   return (
     <section
@@ -20,9 +19,11 @@ const PricingSection = ({ onContactClick }) => {
           transition={{ duration: 0.6, ease: "easeOut" }}
           className="mb-10 text-center"
         >
-          <h2 className="font-heading text-3xl font-bold uppercase tracking-[0.08em] text-slate-100 sm:text-4xl">
-            {title}
-          </h2>
+          <ScrambleTitle
+            as="h2"
+            text="Pricing"
+            className="font-heading text-3xl font-bold uppercase tracking-[0.04em] text-slate-100 sm:text-4xl"
+          />
           <p className="mx-auto mt-4 max-w-2xl font-body text-base text-slate-300 sm:text-lg">
             Alege nivelul potrivit pentru echipa ta si extinde functionalitatile pe masura ce
             cresc operatiunile.
@@ -31,7 +32,6 @@ const PricingSection = ({ onContactClick }) => {
 
         <div className="grid gap-6 md:grid-cols-2">
           <motion.article
-            layout
             initial={{ opacity: 0, y: 24 }}
             animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0 }}
             transition={{ duration: 0.62, delay: 0.1, ease: "easeOut" }}
@@ -50,7 +50,6 @@ const PricingSection = ({ onContactClick }) => {
           </motion.article>
 
           <motion.article
-            layout
             initial={{ opacity: 0, y: 24 }}
             animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0 }}
             transition={{ duration: 0.62, delay: 0.18, ease: "easeOut" }}
