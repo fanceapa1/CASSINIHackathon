@@ -1,0 +1,35 @@
+<svg width="1200" height="900" viewBox="0 0 1200 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="102" y1="92" x2="1088" y2="810" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10315D"/>
+      <stop offset="1" stop-color="#0E1B33"/>
+    </linearGradient>
+    <linearGradient id="card" x1="188" y1="156" x2="1032" y2="706" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#36B4D0"/>
+      <stop offset="1" stop-color="#156B95"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="900" rx="52" fill="url(#bg)"/>
+  <rect x="128" y="120" width="944" height="660" rx="38" fill="url(#card)" fill-opacity="0.24" stroke="#9DE0F2" stroke-opacity="0.45"/>
+  <circle cx="286" cy="278" r="88" fill="#EEF9FF"/>
+  <circle cx="602" cy="278" r="88" fill="#EEF9FF"/>
+  <circle cx="918" cy="278" r="88" fill="#EEF9FF"/>
+  <circle cx="286" cy="578" r="88" fill="#EEF9FF"/>
+  <circle cx="602" cy="578" r="88" fill="#EEF9FF"/>
+  <circle cx="918" cy="578" r="88" fill="#EEF9FF"/>
+  <path d="M374 278H514" stroke="#D2EEFA" stroke-width="18" stroke-linecap="round"/>
+  <path d="M690 278H830" stroke="#D2EEFA" stroke-width="18" stroke-linecap="round"/>
+  <path d="M286 366V490" stroke="#D2EEFA" stroke-width="18" stroke-linecap="round"/>
+  <path d="M602 366V490" stroke="#D2EEFA" stroke-width="18" stroke-linecap="round"/>
+  <path d="M918 366V490" stroke="#D2EEFA" stroke-width="18" stroke-linecap="round"/>
+  <path d="M374 578H514" stroke="#D2EEFA" stroke-width="18" stroke-linecap="round"/>
+  <path d="M690 578H830" stroke="#D2EEFA" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="286" cy="278" r="40" fill="#1AA5C6"/>
+  <circle cx="602" cy="278" r="40" fill="#1AA5C6"/>
+  <circle cx="918" cy="278" r="40" fill="#1AA5C6"/>
+  <circle cx="286" cy="578" r="40" fill="#FB7D60"/>
+  <circle cx="602" cy="578" r="40" fill="#FB7D60"/>
+  <circle cx="918" cy="578" r="40" fill="#FB7D60"/>
+  <rect x="438" y="400" width="328" height="58" rx="29" fill="#F2FCFF"/>
+  <rect x="488" y="422" width="228" height="14" rx="7" fill="#1B5D89"/>
+</svg>
