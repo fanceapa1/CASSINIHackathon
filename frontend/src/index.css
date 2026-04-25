@@ -1,0 +1,313 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-heading: "Space Grotesk", sans-serif;
+  --font-body: "Manrope", sans-serif;
+  --color-ink: #101725;
+  --color-surface: #f2f6fc;
+  --color-accent: #1387a8;
+  --color-coral: #f9735b;
+  --shadow-soft: 0 24px 45px -30px rgba(10, 35, 66, 0.45);
+}
+
+/* ── Base resets ─────────────────────────────────────────── */
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #020617;
+  color: #f8fafc;
+}
+
+/* ── Landing page — space background ────────────────────── */
+
+html {
+  scroll-behavior: smooth;
+}
+
+.space-sky {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(46, 185, 238, 0.2), transparent 36%),
+    radial-gradient(circle at 82% 84%, rgba(249, 115, 91, 0.16), transparent 34%),
+    radial-gradient(circle at 50% 50%, rgba(6, 12, 26, 0.8), rgba(3, 5, 12, 0.98));
+}
+
+.stars-layer {
+  --star-scale: 1;
+  background-image:
+    radial-gradient(2px 2px at 12% 24%, rgba(255, 255, 255, 0.75), transparent),
+    radial-gradient(1.5px 1.5px at 78% 16%, rgba(147, 234, 255, 0.9), transparent),
+    radial-gradient(2px 2px at 44% 76%, rgba(255, 255, 255, 0.78), transparent),
+    radial-gradient(1.5px 1.5px at 67% 62%, rgba(191, 242, 255, 0.7), transparent),
+    radial-gradient(2px 2px at 89% 42%, rgba(255, 255, 255, 0.74), transparent),
+    radial-gradient(1.5px 1.5px at 24% 64%, rgba(167, 229, 255, 0.8), transparent),
+    radial-gradient(2px 2px at 55% 32%, rgba(255, 255, 255, 0.66), transparent);
+  background-size: 760px 760px;
+  opacity: 0.65;
+  animation: drift 80s linear infinite;
+}
+
+.stars-layer--far {
+  --star-scale: 1.2;
+  opacity: 0.34;
+  animation-duration: 120s;
+}
+
+.grid-haze {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-position: center;
+  background-size: 72px 72px;
+  mask-image: radial-gradient(circle at center, black, transparent 78%);
+}
+
+.dashboard-grid {
+  background-image:
+    linear-gradient(rgba(34, 211, 238, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.08) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.78), transparent);
+}
+
+@keyframes drift {
+  from { transform: translateY(0) scale(var(--star-scale)); }
+  to   { transform: translateY(-200px) scale(var(--star-scale)); }
+}
+
+/* ── Login page ──────────────────────────────────────────── */
+
+.login-page {
+  align-items: center;
+  background:
+    linear-gradient(135deg, rgba(24, 78, 119, 0.08), transparent 34%),
+    linear-gradient(315deg, rgba(45, 106, 79, 0.11), transparent 32%),
+    #f4f7fb;
+  display: flex;
+  min-height: 100vh;
+  padding: 32px;
+}
+
+.login-shell {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  margin: 0 auto;
+  max-width: 1120px;
+  width: 100%;
+}
+
+.login-intro,
+.login-panel,
+.status-card,
+.workspace-panel {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #d8e2ee;
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(30, 48, 78, 0.08);
+}
+
+.login-intro {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 520px;
+  overflow: hidden;
+  padding: 42px;
+  position: relative;
+}
+
+.login-intro::after {
+  background:
+    linear-gradient(90deg, rgba(45, 106, 79, 0.12) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(24, 78, 119, 0.12) 1px, transparent 1px);
+  background-size: 42px 42px;
+  bottom: 0;
+  content: "";
+  height: 190px;
+  left: 0;
+  opacity: 0.9;
+  position: absolute;
+  right: 0;
+}
+
+.login-intro > * {
+  position: relative;
+  z-index: 1;
+}
+
+.eyebrow,
+.section-kicker {
+  color: #42627f;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+.login-page h1,
+.login-page h2,
+.login-page p {
+  margin-top: 0;
+}
+
+.login-page h1 {
+  color: #101828;
+  font-size: clamp(2rem, 5vw, 4.25rem);
+  line-height: 1;
+  margin-bottom: 18px;
+  max-width: 720px;
+}
+
+.login-page h2 {
+  color: #101828;
+  font-size: 1.25rem;
+  line-height: 1.2;
+  margin-bottom: 10px;
+}
+
+.login-intro p:not(.eyebrow) {
+  color: #3a4a5f;
+  font-size: 1.08rem;
+  max-width: 650px;
+}
+
+.signal-strip {
+  align-items: stretch;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.signal-strip span {
+  background: #e9f1f8;
+  border-left: 4px solid #2d6a4f;
+  color: #1b344d;
+  min-height: 54px;
+  padding: 12px;
+}
+
+.login-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 32px;
+}
+
+.login-panel label {
+  color: #26374f;
+  display: grid;
+  font-weight: 700;
+  gap: 8px;
+}
+
+.login-panel input {
+  background: #ffffff;
+  border: 1px solid #b8c7d8;
+  border-radius: 6px;
+  color: #172033;
+  font: inherit;
+  min-height: 46px;
+  padding: 10px 12px;
+  width: 100%;
+}
+
+.login-panel input:focus {
+  border-color: #1f7a8c;
+  box-shadow: 0 0 0 4px rgba(31, 122, 140, 0.14);
+  outline: none;
+}
+
+.primary-button,
+.secondary-button,
+.credential-card {
+  border-radius: 6px;
+  cursor: pointer;
+  transition: box-shadow 160ms ease, transform 160ms ease;
+}
+
+.primary-button {
+  background: #184e77;
+  border: 1px solid #184e77;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 800;
+  min-height: 46px;
+  padding: 10px 18px;
+}
+
+.primary-button:hover,
+.credential-card:hover {
+  box-shadow: 0 10px 24px rgba(24, 78, 119, 0.15);
+  transform: translateY(-1px);
+}
+
+.form-error {
+  background: #fff1f0;
+  border: 1px solid #ffccc7;
+  border-radius: 6px;
+  color: #a8071a;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.credentials-list {
+  border-top: 1px solid #d8e2ee;
+  display: grid;
+  gap: 10px;
+  padding-top: 18px;
+}
+
+.credential-card {
+  background: #f8fbfd;
+  border: 1px solid #d8e2ee;
+  color: #172033;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 8px;
+  padding: 14px;
+  text-align: left;
+}
+
+.credential-card strong,
+.credential-card small,
+.credential-card code {
+  display: block;
+}
+
+.credential-card small {
+  color: #52657a;
+  margin-top: 3px;
+}
+
+.credential-card code {
+  color: #2d6a4f;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 920px) {
+  .login-page { padding: 18px; }
+  .login-shell { grid-template-columns: 1fr; }
+  .login-intro { min-height: auto; }
+  .signal-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  .login-intro,
+  .login-panel { padding: 20px; }
+  .signal-strip { grid-template-columns: 1fr; }
+}
