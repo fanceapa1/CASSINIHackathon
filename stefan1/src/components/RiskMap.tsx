@@ -40,6 +40,25 @@ interface OfficialCountryCollection {
   features: OfficialCountryFeature[];
 }
 
+interface OfficialAdm1Feature {
+  type: "Feature";
+  properties: {
+    countryCode: string;
+    shapeName?: string;
+    shapeISO?: string;
+    shapeID?: string;
+  };
+  geometry: {
+    type: "Polygon" | "MultiPolygon";
+    coordinates: unknown;
+  };
+}
+
+interface OfficialAdm1Collection {
+  type: "FeatureCollection";
+  features: OfficialAdm1Feature[];
+}
+
 interface SearchItem {
   id: string;
   kind: "country" | "region";
@@ -51,48 +70,20 @@ interface SearchItem {
 const BASE_MAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
 const EUROPE_GLOBE_VIEW = {
-  longitude: 12.5,
-  latitude: 50.5,
-  zoom: 2.25,
+  longitude: 15.5,
+  latitude: 53.4,
+  zoom: 3.15,
   pitch: 0,
   bearing: 0,
 };
 
-function getCountryFillLayer(selectedZoneId: string | null): LayerProps {
+function getCountryHitLayer(): LayerProps {
   return {
     id: "risk-zone-fill",
     type: "fill",
     paint: {
-      "fill-color": [
-        "interpolate",
-        ["linear"],
-        ["coalesce", ["to-number", ["get", "riskLevel"]], 0],
-        0,
-        "rgba(34, 197, 94, 0.34)",
-        50,
-        "rgba(245, 158, 11, 0.46)",
-        100,
-        "rgba(239, 68, 68, 0.62)",
-      ] as unknown as never,
-      "fill-opacity": [
-        "case",
-        ["==", ["get", "id"], selectedZoneId ?? ""],
-        0.9,
-        0.58,
-      ] as unknown as never,
-      "fill-outline-color": "rgba(241, 245, 249, 0.24)",
-    },
-  };
-}
-
-function getDimUnselectedCountriesLayer(selectedZoneId: string): LayerProps {
-  return {
-    id: "risk-zone-dim",
-    type: "fill",
-    filter: ["!=", ["get", "id"], selectedZoneId] as unknown as never,
-    paint: {
-      "fill-color": "rgba(2, 6, 23, 0.70)",
-      "fill-opacity": 0.4,
+      "fill-color": "rgba(15, 23, 42, 0.01)",
+      "fill-opacity": 0.01,
     },
   };
 }
@@ -101,8 +92,8 @@ const countryOutlineLayer: LayerProps = {
   id: "risk-zone-outline",
   type: "line",
   paint: {
-    "line-color": "rgba(148, 163, 184, 0.70)",
-    "line-width": 1.2,
+    "line-color": "rgba(226, 232, 240, 0.72)",
+    "line-width": 2.2,
   },
 };
 
@@ -118,43 +109,68 @@ function getSelectedCountryOutlineLayer(selectedZoneId: string): LayerProps {
   };
 }
 
-const regionFillLayer: LayerProps = {
-  id: "risk-region-fill",
-  type: "fill",
-  paint: {
-    "fill-color": [
-      "interpolate",
-      ["linear"],
-      ["coalesce", ["to-number", ["get", "riskLevel"]], 0],
-      0,
-      "rgba(74, 222, 128, 0.24)",
-      50,
-      "rgba(250, 204, 21, 0.30)",
-      100,
-      "rgba(244, 63, 94, 0.42)",
-    ] as unknown as never,
-    "fill-opacity": 0.78,
-  },
-};
-
-function getRegionDimLayer(selectedRegionId: string): LayerProps {
+function getRegionFillLayer(selectedZoneId: string | null, selectedRegionId: string | null): LayerProps {
   return {
-    id: "risk-region-dim",
+    id: "risk-region-fill",
     type: "fill",
-    filter: ["!=", ["get", "id"], selectedRegionId] as unknown as never,
-    paint: {
-      "fill-color": "rgba(15, 23, 42, 0.55)",
-      "fill-opacity": 0.42,
-    },
-  };
+      paint: {
+        "fill-color": [
+          "interpolate",
+        ["linear"],
+        ["coalesce", ["to-number", ["get", "riskLevel"]], 0],
+        0,
+        "rgba(74, 222, 128, 0.32)",
+        50,
+        "rgba(250, 204, 21, 0.42)",
+        100,
+        "rgba(244, 63, 94, 0.58)",
+      ] as unknown as never,
+        "fill-opacity": [
+          "case",
+          ["==", ["get", "id"], selectedRegionId ?? ""],
+          0.94,
+          ["==", ["get", "zoneId"], selectedZoneId ?? ""],
+          0.88,
+          0.82,
+        ] as unknown as never,
+      },
+    };
+}
+
+function getRegionDimLayer(selectedZoneId: string | null, selectedRegionId: string | null): LayerProps | null {
+  if (selectedRegionId) {
+    return {
+      id: "risk-region-dim",
+      type: "fill",
+      filter: ["!=", ["get", "id"], selectedRegionId] as unknown as never,
+      paint: {
+        "fill-color": "rgba(15, 23, 42, 0.56)",
+        "fill-opacity": 0.34,
+      },
+    };
+  }
+
+  if (selectedZoneId) {
+    return {
+      id: "risk-region-dim",
+      type: "fill",
+      filter: ["!=", ["get", "zoneId"], selectedZoneId] as unknown as never,
+      paint: {
+        "fill-color": "rgba(15, 23, 42, 0.48)",
+        "fill-opacity": 0.28,
+      },
+    };
+  }
+
+  return null;
 }
 
 const regionOutlineLayer: LayerProps = {
   id: "risk-region-outline",
   type: "line",
   paint: {
-    "line-color": "rgba(148, 163, 184, 0.72)",
-    "line-width": 1.1,
+    "line-color": "rgba(226, 232, 240, 0.8)",
+    "line-width": 1.35,
   },
 };
 
@@ -188,6 +204,14 @@ function normalizePolygonRings(rings: [number, number][][]): [number, number][][
     .map((ring) => closePolygonRing(ring));
 }
 
+function normalizeLookupText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "")
+    .toLowerCase();
+}
+
 function getRegionGeometry(region: ZoneRegionWithRisk): { type: "Polygon" | "MultiPolygon"; coordinates: unknown } | null {
   if (region.geometry?.type === "Polygon") {
     const rings = normalizePolygonRings(region.geometry.coordinates as [number, number][][]);
@@ -212,13 +236,6 @@ function getRegionGeometry(region: ZoneRegionWithRisk): { type: "Polygon" | "Mul
     }
   }
 
-  if (Array.isArray(region.polygon) && region.polygon.length >= 3) {
-    return {
-      type: "Polygon",
-      coordinates: [closePolygonRing(region.polygon as [number, number][])],
-    };
-  }
-
   return null;
 }
 
@@ -236,6 +253,7 @@ export function RiskMap({
   const [searchQuery, setSearchQuery] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [officialCountries, setOfficialCountries] = useState<OfficialCountryCollection | null>(null);
+  const [officialAdm1Regions, setOfficialAdm1Regions] = useState<OfficialAdm1Collection | null>(null);
 
   const selectedZone = useMemo(
     () => zones.find((zone) => zone.id === selectedZoneId) ?? null,
@@ -259,6 +277,25 @@ export function RiskMap({
       .catch(() => {
         if (!cancelled) {
           setOfficialCountries({ type: "FeatureCollection", features: [] });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/data/europe-adm1.geojson")
+      .then((response) => response.json())
+      .then((data: OfficialAdm1Collection) => {
+        if (!cancelled) {
+          setOfficialAdm1Regions(data);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOfficialAdm1Regions({ type: "FeatureCollection", features: [] });
         }
       });
     return () => {
@@ -345,11 +382,51 @@ export function RiskMap({
   }, [zones, officialCountries]);
 
   const regionFeatureList = useMemo(() => {
-    if (!selectedZone) {
-      return [];
+    const regionsByCountryAndName = new globalThis.Map(
+      regions.map((region) => [
+        `${region.countryCode}:${normalizeLookupText(region.name)}`,
+        region,
+      ]),
+    );
+
+    const zonesByCountryCode = new globalThis.Map(
+      zones.map((zone) => [zone.countryCode, zone]),
+    );
+
+    const officialFeatures = officialAdm1Regions?.features ?? [];
+    if (officialFeatures.length > 0) {
+      return officialFeatures
+        .map((feature) => {
+          const countryCode = feature.properties.countryCode;
+          const zone = zonesByCountryCode.get(countryCode);
+          if (!zone) {
+            return null;
+          }
+
+          const regionName = feature.properties.shapeName?.trim() || "Region";
+          const matchedRegion = regionsByCountryAndName.get(
+            `${countryCode}:${normalizeLookupText(regionName)}`,
+          );
+          const featureId =
+            matchedRegion?.id ??
+            `${zone.id}-adm1-${normalizeLookupText(feature.properties.shapeID ?? regionName)}`;
+
+          return {
+            type: "Feature",
+            properties: {
+              id: featureId,
+              zoneId: zone.id,
+              countryCode,
+              name: regionName,
+              riskLevel: matchedRegion?.riskLevel ?? zone.riskLevel,
+            },
+            geometry: feature.geometry,
+          };
+        })
+        .filter((feature): feature is NonNullable<typeof feature> => feature !== null);
     }
+
     return regions
-      .filter((region) => region.countryId === selectedZone.id)
       .map((region) => {
         const geometry = getRegionGeometry(region);
         if (!geometry) {
@@ -368,7 +445,7 @@ export function RiskMap({
         };
       })
       .filter((feature): feature is NonNullable<typeof feature> => feature !== null);
-  }, [selectedZone, regions]);
+  }, [officialAdm1Regions, regions, zones]);
 
   const regionsGeoJson = useMemo(
     () => ({
@@ -513,12 +590,18 @@ export function RiskMap({
       const clickedRegion = event.features?.find((feature) => feature.layer?.id === "risk-region-fill");
       const regionId = clickedRegion?.properties?.id;
       const regionCountryId = clickedRegion?.properties?.zoneId;
+      const regionName = clickedRegion?.properties?.name;
       if (typeof regionId === "string" && typeof regionCountryId === "string") {
         onSelectZone(regionCountryId);
-        onSelectRegion(regionId);
         const clickedRegionData = regions.find((region) => region.id === regionId);
         if (clickedRegionData) {
+          onSelectRegion(regionId);
           setSearchQuery(clickedRegionData.name);
+        } else {
+          onSelectRegion(null);
+          if (typeof regionName === "string") {
+            setSearchQuery(regionName);
+          }
         }
         return;
       }
@@ -542,13 +625,11 @@ export function RiskMap({
     [onSelectZone, onSelectRegion, zones, regions],
   );
 
-  const interactiveLayerIds = useMemo(() => {
-    const ids = ["risk-zone-fill"];
-    if (selectedZone) {
-      ids.unshift("risk-region-fill");
-    }
-    return ids;
-  }, [selectedZone]);
+  const interactiveLayerIds = useMemo(() => ["risk-region-fill", "risk-zone-fill"], []);
+  const regionDimLayer = useMemo(
+    () => getRegionDimLayer(selectedZoneId, selectedRegionId),
+    [selectedRegionId, selectedZoneId],
+  );
 
   return (
     <div className="relative h-full w-full">
@@ -556,7 +637,7 @@ export function RiskMap({
         ref={mapRef}
         mapLib={maplibregl}
         mapStyle={BASE_MAP_STYLE}
-        projection={selectedZoneId ? "mercator" : "globe"}
+        projection="mercator"
         initialViewState={EUROPE_GLOBE_VIEW}
         interactiveLayerIds={interactiveLayerIds}
         onClick={handleMapClick}
@@ -575,20 +656,17 @@ export function RiskMap({
         <NavigationControl position="top-right" />
 
         <Source id="risk-zones" type="geojson" data={zonesGeoJson as never}>
-          {selectedZoneId ? <Layer {...getDimUnselectedCountriesLayer(selectedZoneId)} /> : null}
-          <Layer {...getCountryFillLayer(selectedZoneId)} />
+          <Layer {...getCountryHitLayer()} />
           <Layer {...countryOutlineLayer} />
           {selectedZoneId ? <Layer {...getSelectedCountryOutlineLayer(selectedZoneId)} /> : null}
         </Source>
 
-        {selectedZone ? (
-          <Source id="risk-regions" type="geojson" data={regionsGeoJson as never}>
-            {selectedRegionId ? <Layer {...getRegionDimLayer(selectedRegionId)} /> : null}
-            <Layer {...regionFillLayer} />
-            <Layer {...regionOutlineLayer} />
-            {selectedRegionId ? <Layer {...getSelectedRegionOutlineLayer(selectedRegionId)} /> : null}
-          </Source>
-        ) : null}
+        <Source id="risk-regions" type="geojson" data={regionsGeoJson as never}>
+          <Layer {...getRegionFillLayer(selectedZoneId, selectedRegionId)} />
+          {regionDimLayer ? <Layer {...regionDimLayer} /> : null}
+          <Layer {...regionOutlineLayer} />
+          {selectedRegionId ? <Layer {...getSelectedRegionOutlineLayer(selectedRegionId)} /> : null}
+        </Source>
 
         {incidents.map((incident) => (
           <Marker

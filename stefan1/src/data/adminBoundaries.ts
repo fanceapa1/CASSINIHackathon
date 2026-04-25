@@ -14,6 +14,11 @@ interface BoundaryCollection {
   features: BoundaryFeature[];
 }
 
+interface BoundaryMetadata {
+  simplifiedGeometryGeoJSON?: string;
+  gjDownloadURL?: string;
+}
+
 export interface AdminBoundaryRegion {
   id: string;
   name: string;
@@ -54,6 +59,8 @@ const iso2ToIso3: Record<string, string> = {
 };
 
 const boundaryCache = new globalThis.Map<string, Promise<AdminBoundaryRegion[]>>();
+const metadataCache = new globalThis.Map<string, Promise<BoundaryMetadata | null>>();
+const europeAdm1CollectionCache = new globalThis.Map<string, Promise<BoundaryCollection | null>>();
 
 function closeRing(ring: LngLat[]): LngLat[] {
   if (ring.length < 3) {
@@ -188,6 +195,28 @@ function normalizeText(value: string): string {
     .toLowerCase();
 }
 
+function repairMojibake(value: string): string {
+  const looksBroken =
+    value.includes("Ã") ||
+    value.includes("â€") ||
+    value.includes("â€™") ||
+    value.includes("â€œ") ||
+    value.includes("â€") ||
+    value.includes("â€“") ||
+    value.includes("â€”") ||
+    value.includes("Ð");
+
+  if (!looksBroken) {
+    return value;
+  }
+
+  try {
+    return decodeURIComponent(escape(value));
+  } catch {
+    return value;
+  }
+}
+
 function toRegionName(properties: Record<string, unknown>, index: number): string {
   const candidateKeys = [
     "shapeName",
@@ -201,7 +230,7 @@ function toRegionName(properties: Record<string, unknown>, index: number): strin
   for (const key of candidateKeys) {
     const value = properties[key];
     if (typeof value === "string" && value.trim().length > 0) {
-      return value.trim();
+      return repairMojibake(value.trim());
     }
   }
 
@@ -221,11 +250,43 @@ function toRegionId(
   return `${countryCode.toLowerCase()}-adm1-${normalizeText(name)}-${index + 1}`;
 }
 
-function getBoundaryUrls(iso3: string): string[] {
-  return [
+async function fetchBoundaryMetadata(iso3: string): Promise<BoundaryMetadata | null> {
+  const response = await fetch(`https://www.geoboundaries.org/api/current/gbOpen/${iso3}/ADM1/`, {
+    cache: "force-cache",
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = (await response.json()) as BoundaryMetadata;
+  if (!payload) {
+    return null;
+  }
+
+  return payload;
+}
+
+async function getBoundaryMetadata(iso3: string): Promise<BoundaryMetadata | null> {
+  const existing = metadataCache.get(iso3);
+  if (existing) {
+    return existing;
+  }
+
+  const request = fetchBoundaryMetadata(iso3).catch(() => null);
+  metadataCache.set(iso3, request);
+  return request;
+}
+
+function getBoundaryUrls(iso3: string, metadata: BoundaryMetadata | null): string[] {
+  const urls = [
+    metadata?.simplifiedGeometryGeoJSON,
+    metadata?.gjDownloadURL,
     `https://raw.githubusercontent.com/wmgeolab/geoBoundaries/main/releaseData/gbOpen/${iso3}/ADM1/geoBoundaries-${iso3}-ADM1.geojson`,
     `https://cdn.jsdelivr.net/gh/wmgeolab/geoBoundaries@main/releaseData/gbOpen/${iso3}/ADM1/geoBoundaries-${iso3}-ADM1.geojson`,
-  ];
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  return [...new Set(urls)];
 }
 
 async function fetchBoundaryCollection(url: string): Promise<BoundaryCollection | null> {
@@ -238,6 +299,17 @@ async function fetchBoundaryCollection(url: string): Promise<BoundaryCollection 
     return null;
   }
   return payload;
+}
+
+async function getLocalEuropeAdm1Collection(): Promise<BoundaryCollection | null> {
+  const existing = europeAdm1CollectionCache.get("all");
+  if (existing) {
+    return existing;
+  }
+
+  const request = fetchBoundaryCollection("/data/europe-adm1.geojson").catch(() => null);
+  europeAdm1CollectionCache.set("all", request);
+  return request;
 }
 
 function mapBoundaryFeatures(
@@ -270,7 +342,22 @@ async function loadCountryAdminRegions(countryCode: string): Promise<AdminBounda
     return [];
   }
 
-  const urls = getBoundaryUrls(iso3);
+  const localCollection = await getLocalEuropeAdm1Collection();
+  if (localCollection) {
+    const filteredCollection: BoundaryCollection = {
+      type: "FeatureCollection",
+      features: localCollection.features.filter(
+        (feature) => feature.properties?.countryCode === countryCode,
+      ),
+    };
+    const localRegions = mapBoundaryFeatures(countryCode, filteredCollection);
+    if (localRegions.length > 0) {
+      return localRegions;
+    }
+  }
+
+  const metadata = await getBoundaryMetadata(iso3);
+  const urls = getBoundaryUrls(iso3, metadata);
   for (const url of urls) {
     try {
       const collection = await fetchBoundaryCollection(url);
@@ -299,4 +386,45 @@ export async function getCountryAdminRegions(countryCode: string): Promise<Admin
   const request = loadCountryAdminRegions(normalizedCode).catch(() => []);
   boundaryCache.set(normalizedCode, request);
   return request;
+}
+
+export async function getAllCountryAdminRegions(
+  countryCodes: string[],
+): Promise<Record<string, AdminBoundaryRegion[]>> {
+  const normalizedCodes = [...new Set(countryCodes.map((countryCode) => countryCode.toUpperCase()))];
+  const localCollection = await getLocalEuropeAdm1Collection();
+
+  if (localCollection) {
+    const allRegionsByCountry: Record<string, AdminBoundaryRegion[]> = {};
+
+    normalizedCodes.forEach((countryCode) => {
+      const filteredCollection: BoundaryCollection = {
+        type: "FeatureCollection",
+        features: localCollection.features.filter(
+          (feature) => feature.properties?.countryCode === countryCode,
+        ),
+      };
+
+      const regions = mapBoundaryFeatures(countryCode, filteredCollection);
+      if (regions.length > 0) {
+        allRegionsByCountry[countryCode] = regions;
+      }
+    });
+
+    return allRegionsByCountry;
+  }
+
+  const entries = await Promise.all(
+    normalizedCodes.map(async (countryCode) => {
+      const regions = await getCountryAdminRegions(countryCode);
+      return [countryCode, regions] as const;
+    }),
+  );
+
+  return entries.reduce<Record<string, AdminBoundaryRegion[]>>((accumulator, [countryCode, regions]) => {
+    if (regions.length > 0) {
+      accumulator[countryCode] = regions;
+    }
+    return accumulator;
+  }, {});
 }
