@@ -1,31 +1,45 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import Map, {
-  Layer,
-  NavigationControl,
-  Source,
-} from "react-map-gl/maplibre";
-import { Search } from "lucide-react";
+import Map, { Layer, Marker, NavigationControl, Source } from "react-map-gl/maplibre";
+import { Search, X } from "lucide-react";
 import type { FormEvent } from "react";
 import type { LayerProps, MapLayerMouseEvent, MapRef } from "react-map-gl/maplibre";
-import type { FloodZoneWithRisk, MapAnchorPoint } from "../types/flood";
+import type { FloodZoneWithRisk, MapAnchorPoint, ReportedIncident } from "../types/flood";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 interface RiskMapProps {
   zones: FloodZoneWithRisk[];
   selectedZoneId: string | null;
-  onSelectZone: (zoneId: string) => void;
+  incidents: ReportedIncident[];
+  onSelectZone: (zoneId: string | null) => void;
   onFocusAnchorChange?: (anchor: MapAnchorPoint | null) => void;
+}
+
+interface OfficialCountryFeature {
+  type: "Feature";
+  properties: {
+    CNTR_ID: string;
+    NAME_ENGL: string;
+  };
+  geometry: {
+    type: "Polygon" | "MultiPolygon";
+    coordinates: unknown;
+  };
+}
+
+interface OfficialCountryCollection {
+  type: "FeatureCollection";
+  features: OfficialCountryFeature[];
 }
 
 const BASE_MAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
-const DEFAULT_VIEW_STATE = {
-  longitude: -90.0715,
-  latitude: 29.9732,
-  zoom: 10.1,
-  pitch: 38,
-  bearing: 11,
+const EUROPE_GLOBE_VIEW = {
+  longitude: 12.5,
+  latitude: 50.5,
+  zoom: 2.25,
+  pitch: 0,
+  bearing: 0,
 };
 
 function getRiskFillLayer(selectedZoneId: string | null): LayerProps {
@@ -47,10 +61,10 @@ function getRiskFillLayer(selectedZoneId: string | null): LayerProps {
       "fill-opacity": [
         "case",
         ["==", ["get", "id"], selectedZoneId ?? ""],
-        0.88,
-        0.6,
+        0.9,
+        0.58,
       ] as unknown as never,
-      "fill-outline-color": "rgba(241, 245, 249, 0.22)",
+      "fill-outline-color": "rgba(241, 245, 249, 0.24)",
     },
   };
 }
@@ -61,8 +75,8 @@ function getDimUnselectedLayer(selectedZoneId: string): LayerProps {
     type: "fill",
     filter: ["!=", ["get", "id"], selectedZoneId] as unknown as never,
     paint: {
-      "fill-color": "rgba(2, 6, 23, 0.66)",
-      "fill-opacity": 0.36,
+      "fill-color": "rgba(2, 6, 23, 0.70)",
+      "fill-opacity": 0.4,
     },
   };
 }
@@ -71,8 +85,8 @@ const zoneOutlineLayer: LayerProps = {
   id: "risk-zone-outline",
   type: "line",
   paint: {
-    "line-color": "rgba(148, 163, 184, 0.65)",
-    "line-width": 1.25,
+    "line-color": "rgba(148, 163, 184, 0.70)",
+    "line-width": 1.2,
   },
 };
 
@@ -82,8 +96,8 @@ function getSelectedOutlineLayer(selectedZoneId: string): LayerProps {
     type: "line",
     filter: ["==", ["get", "id"], selectedZoneId] as unknown as never,
     paint: {
-      "line-color": "rgba(251, 191, 36, 0.95)",
-      "line-width": 3,
+      "line-color": "rgba(251, 191, 36, 0.98)",
+      "line-width": 2.8,
     },
   };
 }
@@ -103,45 +117,101 @@ function closePolygonRing(coordinates: [number, number][]): [number, number][] {
 export function RiskMap({
   zones,
   selectedZoneId,
+  incidents,
   onSelectZone,
   onFocusAnchorChange,
 }: RiskMapProps) {
   const mapRef = useRef<MapRef | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [officialCountries, setOfficialCountries] = useState<OfficialCountryCollection | null>(
+    null,
+  );
 
   const selectedZone = useMemo(
     () => zones.find((zone) => zone.id === selectedZoneId) ?? null,
     [zones, selectedZoneId],
   );
 
-  const zonesGeoJson = useMemo(
-    () => ({
-      type: "FeatureCollection",
-      features: zones.map((zone) => ({
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/data/eu-countries-2024.geojson")
+      .then((response) => response.json())
+      .then((data: OfficialCountryCollection) => {
+        if (!cancelled) {
+          setOfficialCountries(data);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOfficialCountries({ type: "FeatureCollection", features: [] });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const zonesGeoJson = useMemo(() => {
+    const byCountryCode = new globalThis.Map(zones.map((zone) => [zone.countryCode, zone]));
+    const officialFeatures = officialCountries?.features ?? [];
+
+    const merged = officialFeatures
+      .map((feature) => {
+        const zone = byCountryCode.get(feature.properties.CNTR_ID);
+        if (!zone) {
+          return null;
+        }
+        return {
+          type: "Feature",
+          properties: {
+            id: zone.id,
+            countryCode: zone.countryCode,
+            name: zone.name,
+            riskLevel: zone.riskLevel,
+            source: "GISCO CNTR_RG_20M_2024_4326",
+          },
+          geometry: feature.geometry,
+        };
+      })
+      .filter((value): value is NonNullable<typeof value> => value !== null);
+
+    if (merged.length > 0) {
+      return {
+        type: "FeatureCollection",
+        features: merged,
+      };
+    }
+
+    const fallbackFeatures = zones
+      .filter((zone) => Array.isArray(zone.polygon) && zone.polygon.length >= 3)
+      .map((zone) => ({
         type: "Feature",
         properties: {
           id: zone.id,
+          countryCode: zone.countryCode,
           name: zone.name,
           riskLevel: zone.riskLevel,
+          source: "fallback",
         },
         geometry: {
           type: "Polygon",
-          coordinates: [closePolygonRing(zone.polygon)],
+          coordinates: [closePolygonRing(zone.polygon as [number, number][])],
         },
-      })),
-    }),
-    [zones],
-  );
+      }));
+
+    return {
+      type: "FeatureCollection",
+      features: fallbackFeatures,
+    };
+  }, [zones, officialCountries]);
 
   const filteredZones = useMemo(() => {
     const normalized = searchQuery.trim().toLowerCase();
     if (!normalized) {
-      return zones.slice(0, 5);
+      return zones.slice(0, 7);
     }
-    return zones
-      .filter((zone) => zone.name.toLowerCase().includes(normalized))
-      .slice(0, 5);
+    return zones.filter((zone) => zone.name.toLowerCase().includes(normalized)).slice(0, 7);
   }, [zones, searchQuery]);
 
   const updateFocusAnchor = useCallback(() => {
@@ -156,24 +226,40 @@ export function RiskMap({
   useEffect(() => {
     if (!selectedZone || !mapRef.current) {
       onFocusAnchorChange?.(null);
+      mapRef.current?.flyTo({
+        center: [EUROPE_GLOBE_VIEW.longitude, EUROPE_GLOBE_VIEW.latitude],
+        zoom: EUROPE_GLOBE_VIEW.zoom,
+        pitch: EUROPE_GLOBE_VIEW.pitch,
+        bearing: EUROPE_GLOBE_VIEW.bearing,
+        duration: 1100,
+        essential: true,
+      });
       return;
     }
 
     mapRef.current.flyTo({
       center: selectedZone.center,
-      zoom: 12.8,
-      pitch: 54,
-      bearing: 20,
-      duration: 1600,
+      zoom: 5.4,
+      pitch: 48,
+      bearing: 12,
+      duration: 1500,
       essential: true,
     });
 
     const handle = window.setTimeout(() => {
       updateFocusAnchor();
-    }, 200);
+    }, 220);
 
     return () => window.clearTimeout(handle);
   }, [selectedZone, onFocusAnchorChange, updateFocusAnchor]);
+
+  useEffect(() => {
+    if (selectedZone) {
+      setSearchQuery(selectedZone.name);
+      return;
+    }
+    setSearchQuery("");
+  }, [selectedZone]);
 
   const submitSearch = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
@@ -195,18 +281,20 @@ export function RiskMap({
 
   const handleMapClick = useCallback(
     (event: MapLayerMouseEvent) => {
-      const clickedFeature = event.features?.find(
-        (feature) => feature.layer?.id === "risk-zone-fill",
-      );
-
+      const clickedFeature = event.features?.find((feature) => feature.layer?.id === "risk-zone-fill");
       const featureId = clickedFeature?.properties?.id;
+
       if (typeof featureId === "string") {
         onSelectZone(featureId);
         const clickedZone = zones.find((zone) => zone.id === featureId);
         if (clickedZone) {
           setSearchQuery(clickedZone.name);
         }
+        return;
       }
+
+      onSelectZone(null);
+      setShowSuggestions(false);
     },
     [onSelectZone, zones],
   );
@@ -217,7 +305,8 @@ export function RiskMap({
         ref={mapRef}
         mapLib={maplibregl}
         mapStyle={BASE_MAP_STYLE}
-        initialViewState={DEFAULT_VIEW_STATE}
+        projection={selectedZoneId ? "mercator" : "globe"}
+        initialViewState={EUROPE_GLOBE_VIEW}
         interactiveLayerIds={["risk-zone-fill"]}
         onClick={handleMapClick}
         onMove={() => {
@@ -239,10 +328,30 @@ export function RiskMap({
           <Layer {...zoneOutlineLayer} />
           {selectedZoneId ? <Layer {...getSelectedOutlineLayer(selectedZoneId)} /> : null}
         </Source>
+
+        {incidents.map((incident) => (
+          <Marker
+            key={incident.id}
+            longitude={incident.location[0]}
+            latitude={incident.location[1]}
+            anchor="bottom"
+          >
+            <div className="group relative">
+              <button
+                type="button"
+                className="h-4 w-4 rounded-full border border-rose-200 bg-rose-500 shadow-lg"
+                title={incident.description}
+              />
+              <div className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 hidden -translate-x-1/2 rounded-md bg-slate-950/90 px-2 py-1 text-[11px] text-slate-100 shadow-xl group-hover:block">
+                Incident raportat
+              </div>
+            </div>
+          </Marker>
+        ))}
       </Map>
 
       {selectedZoneId ? (
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-slate-950/30 via-transparent to-slate-950/20" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-slate-950/35 via-transparent to-slate-950/20" />
       ) : null}
 
       <div className="absolute left-4 top-4 z-20 w-full max-w-sm">
@@ -258,9 +367,23 @@ export function RiskMap({
               setShowSuggestions(true);
             }}
             onFocus={() => setShowSuggestions(true)}
-            placeholder="Search zone and zoom..."
-            className="w-full rounded-xl bg-transparent py-3 pl-10 pr-3 text-sm text-slate-100 outline-none placeholder:text-slate-400"
+            placeholder="Cauta tara din UE si zoom..."
+            className="w-full rounded-xl bg-transparent py-3 pl-10 pr-10 text-sm text-slate-100 outline-none placeholder:text-slate-400"
           />
+          {selectedZoneId ? (
+            <button
+              type="button"
+              onClick={() => {
+                onSelectZone(null);
+                setSearchQuery("");
+                setShowSuggestions(false);
+              }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-300 transition hover:bg-slate-700 hover:text-slate-100"
+              aria-label="Clear selection"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
 
           {showSuggestions && filteredZones.length > 0 ? (
             <div className="absolute left-0 right-0 top-[calc(100%+8px)] overflow-hidden rounded-lg border border-slate-700/80 bg-slate-900/95">

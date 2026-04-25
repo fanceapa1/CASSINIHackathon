@@ -9,8 +9,9 @@ export interface ZoneStats {
 export interface FloodZone {
   id: string;
   name: string;
+  countryCode: string;
   center: LngLat;
-  polygon: LngLat[];
+  polygon?: LngLat[];
   baselineRiskLevel: number;
   stats: ZoneStats;
   emergencyPlans: string[];
@@ -37,6 +38,15 @@ export interface GeneratedSimulationResult {
   responseTimeMinutes: number;
 }
 
+export interface ReportedIncident {
+  id: string;
+  createdAt: string;
+  description: string;
+  location: LngLat;
+  imagePreviews: string[];
+  zoneId: string | null;
+}
+
 export interface MapAnchorPoint {
   x: number;
   y: number;
@@ -48,4 +58,3 @@ export interface RectBounds {
   width: number;
   height: number;
 }
-

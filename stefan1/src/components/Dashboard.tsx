@@ -2,30 +2,44 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
+  Camera,
   ChevronDown,
   Crown,
+  Globe2,
   History,
+  LocateFixed,
   Lock,
+  PanelRightClose,
+  PanelRightOpen,
+  Send,
   ShieldAlert,
   Sparkles,
   Users,
   Waves,
+  X,
 } from "lucide-react";
-import { floodZones, historicalSimulations } from "../data/floodMockData";
+import {
+  floodZones,
+  historicalSimulations,
+  informRiskDataSource,
+} from "../data/floodMockData";
 import { DraggableWindow } from "./DraggableWindow";
 import { RiskMap } from "./RiskMap";
+import type { ChangeEvent } from "react";
 import type {
   FloodZoneWithRisk,
   GeneratedSimulationResult,
+  LngLat,
   MapAnchorPoint,
   RectBounds,
+  ReportedIncident,
 } from "../types/flood";
 
 type WindowKey = "past" | "create";
 type SimulationRunState = "idle" | "running" | "complete";
 
 const isPremium = false;
-const SIDEBAR_WIDTH = 320;
+const SIDEBAR_WIDTH = 344;
 
 const loadingMessages = [
   "Extracting satellite data...",
@@ -41,6 +55,16 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
+function formatIncidentDate(value: string): string {
+  return new Date(value).toLocaleString("ro-RO", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function getRiskChipClasses(riskLevel: number): string {
   if (riskLevel < 35) {
     return "bg-emerald-500/25 text-emerald-200";
@@ -51,13 +75,26 @@ function getRiskChipClasses(riskLevel: number): string {
   return "bg-rose-500/30 text-rose-100";
 }
 
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("Unable to parse image"));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("File read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function Dashboard() {
   const mapAreaRef = useRef<HTMLDivElement | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
 
-  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(
-    floodZones[0]?.id ?? null,
-  );
+  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [activeScenarioId, setActiveScenarioId] = useState<string>("live");
   const [generatedSimulation, setGeneratedSimulation] =
     useState<GeneratedSimulationResult | null>(null);
@@ -65,6 +102,7 @@ export default function Dashboard() {
   const [mapAreaSize, setMapAreaSize] = useState({ width: 1200, height: 800 });
   const [plansExpanded, setPlansExpanded] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [contextMenuVisible, setContextMenuVisible] = useState(true);
   const [openWindows, setOpenWindows] = useState<Record<WindowKey, boolean>>({
     past: false,
     create: false,
@@ -73,13 +111,19 @@ export default function Dashboard() {
   const [simulationState, setSimulationState] = useState<SimulationRunState>("idle");
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
 
+  const [incidentDescription, setIncidentDescription] = useState("");
+  const [incidentImages, setIncidentImages] = useState<string[]>([]);
+  const [incidentLocation, setIncidentLocation] = useState<LngLat | null>(null);
+  const [locatingUser, setLocatingUser] = useState(false);
+  const [reportedIncidents, setReportedIncidents] = useState<ReportedIncident[]>([]);
+
   const buildGeneratedSimulation = useCallback(
     (focusZoneId: string | null): GeneratedSimulationResult => {
       const createdAt = new Date().toISOString();
       const riskByZone = floodZones.reduce<Record<string, number>>((acc, zone, index) => {
         const baseline = zone.baselineRiskLevel;
-        const zoneBoost = zone.id === focusZoneId ? 20 : 8;
-        const structuralVariance = (index + 1) * 3;
+        const zoneBoost = zone.id === focusZoneId ? 17 : 8;
+        const structuralVariance = ((index + 1) * 3) % 11;
         acc[zone.id] = Math.min(100, baseline + zoneBoost + structuralVariance);
         return acc;
       }, {});
@@ -87,7 +131,7 @@ export default function Dashboard() {
       const estimatedDisplacement = Math.round(
         floodZones.reduce((sum, zone) => {
           const risk = riskByZone[zone.id] ?? zone.baselineRiskLevel;
-          return sum + zone.stats.populationAtRisk * (risk / 100) * 0.18;
+          return sum + zone.stats.populationAtRisk * (risk / 100) * 0.2;
         }, 0),
       );
 
@@ -97,7 +141,7 @@ export default function Dashboard() {
         createdAt,
         riskByZone,
         estimatedDisplacement,
-        responseTimeMinutes: 42,
+        responseTimeMinutes: 47,
       };
     },
     [],
@@ -113,10 +157,7 @@ export default function Dashboard() {
     return floodZones.map((zone) => {
       const historicalRisk = selectedHistorical?.riskByZone[zone.id];
       const generatedRisk = generatedRiskByZone?.[zone.id];
-      const riskLevel =
-        generatedRisk ??
-        historicalRisk ??
-        zone.baselineRiskLevel;
+      const riskLevel = generatedRisk ?? historicalRisk ?? zone.baselineRiskLevel;
 
       return {
         ...zone,
@@ -144,18 +185,18 @@ export default function Dashboard() {
   }, [activeScenarioId, generatedSimulation]);
 
   const contextMenuRect = useMemo<RectBounds | null>(() => {
-    if (!selectedZone || !focusAnchor) {
+    if (!selectedZone || !focusAnchor || !contextMenuVisible) {
       return null;
     }
-    const menuWidth = 232;
-    const menuHeight = 118;
+    const menuWidth = 248;
+    const menuHeight = 144;
     return {
       width: menuWidth,
       height: menuHeight,
-      x: clamp(focusAnchor.x + 20, 12, Math.max(12, mapAreaSize.width - menuWidth - 12)),
-      y: clamp(focusAnchor.y + 20, 12, Math.max(12, mapAreaSize.height - menuHeight - 12)),
+      x: clamp(focusAnchor.x + 24, 12, Math.max(12, mapAreaSize.width - menuWidth - 12)),
+      y: clamp(focusAnchor.y + 24, 12, Math.max(12, mapAreaSize.height - menuHeight - 12)),
     };
-  }, [selectedZone, focusAnchor, mapAreaSize.width, mapAreaSize.height]);
+  }, [selectedZone, focusAnchor, contextMenuVisible, mapAreaSize.width, mapAreaSize.height]);
 
   const avoidRects = useMemo<RectBounds[]>(
     () => (contextMenuRect ? [contextMenuRect] : []),
@@ -172,13 +213,13 @@ export default function Dashboard() {
 
   const initialWindowPositions = useMemo(() => {
     const rightAlignedX = clamp(
-      mapAreaSize.width - 460,
+      mapAreaSize.width - 470,
       18,
-      Math.max(18, mapAreaSize.width - 440),
+      Math.max(18, mapAreaSize.width - 448),
     );
     return {
-      past: { x: 22, y: 92 },
-      create: { x: rightAlignedX, y: 104 },
+      past: { x: 24, y: 92 },
+      create: { x: rightAlignedX, y: 108 },
     };
   }, [mapAreaSize.width]);
 
@@ -189,6 +230,11 @@ export default function Dashboard() {
   const closeWindow = useCallback((windowKey: WindowKey) => {
     setOpenWindows((current) => ({ ...current, [windowKey]: false }));
     setWindowStack((current) => current.filter((key) => key !== windowKey));
+  }, []);
+
+  const closeAllWindows = useCallback(() => {
+    setOpenWindows({ past: false, create: false });
+    setWindowStack([]);
   }, []);
 
   const openWindow = useCallback(
@@ -214,8 +260,22 @@ export default function Dashboard() {
     }
     toastTimeoutRef.current = window.setTimeout(() => {
       setToastMessage(null);
-    }, 2200);
+    }, 2400);
   }, []);
+
+  const handleZoneSelection = useCallback(
+    (zoneId: string | null) => {
+      setSelectedZoneId(zoneId);
+      if (zoneId) {
+        setContextMenuVisible(true);
+        return;
+      }
+      setFocusAnchor(null);
+      setContextMenuVisible(false);
+      closeAllWindows();
+    },
+    [closeAllWindows],
+  );
 
   useEffect(() => {
     return () => {
@@ -263,6 +323,11 @@ export default function Dashboard() {
   }, [simulationState, buildGeneratedSimulation, selectedZoneId]);
 
   const handleCreateSimulationClick = useCallback(() => {
+    if (!selectedZoneId) {
+      showToast("Selectează mai întâi o zonă.");
+      return;
+    }
+
     if (!isPremium) {
       showToast("Upgrade required");
       return;
@@ -273,35 +338,102 @@ export default function Dashboard() {
     setGeneratedSimulation(null);
     setSimulationState("running");
     setLoadingStepIndex(0);
-  }, [openWindow, showToast]);
+  }, [openWindow, selectedZoneId, showToast]);
 
   const rerunSimulation = useCallback(() => {
+    if (!selectedZoneId) {
+      showToast("Selectează mai întâi o zonă.");
+      return;
+    }
     setActiveScenarioId("live");
     setGeneratedSimulation(null);
     setSimulationState("running");
     setLoadingStepIndex(0);
-  }, []);
+  }, [selectedZoneId, showToast]);
+
+  const onImageUpload = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const incomingFiles = Array.from(event.target.files ?? []).slice(0, 4);
+      if (incomingFiles.length === 0) {
+        return;
+      }
+      try {
+        const previews = await Promise.all(incomingFiles.map(fileToDataUrl));
+        setIncidentImages((current) => [...current, ...previews].slice(0, 4));
+      } catch {
+        showToast("Nu am putut încărca imaginile.");
+      }
+      event.currentTarget.value = "";
+    },
+    [showToast],
+  );
+
+  const requestLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      showToast("Browserul nu suportă geolocație.");
+      return;
+    }
+
+    setLocatingUser(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setIncidentLocation([position.coords.longitude, position.coords.latitude]);
+        setLocatingUser(false);
+        showToast("Locația curentă a fost detectată.");
+      },
+      () => {
+        setLocatingUser(false);
+        showToast("Accesul la locație a fost refuzat.");
+      },
+      { enableHighAccuracy: true, timeout: 12_000 },
+    );
+  }, [showToast]);
+
+  const submitIncidentReport = useCallback(() => {
+    if (!incidentLocation) {
+      showToast("Adaugă locația curentă înainte de trimitere.");
+      return;
+    }
+
+    const incident: ReportedIncident = {
+      id: `incident-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      description: incidentDescription.trim() || "Incendiu localizat / inundare urbană",
+      location: incidentLocation,
+      imagePreviews: incidentImages,
+      zoneId: selectedZoneId,
+    };
+
+    setReportedIncidents((current) => [incident, ...current].slice(0, 24));
+    setIncidentDescription("");
+    setIncidentImages([]);
+    setIncidentLocation(null);
+    showToast("Incident raportat cu succes.");
+  }, [incidentLocation, incidentDescription, incidentImages, selectedZoneId, showToast]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
-      <aside className="absolute inset-y-0 left-0 z-40 w-80 border-r border-slate-700/80 bg-slate-900/95 px-5 py-6 shadow-2xl backdrop-blur-sm">
+      <aside className="absolute inset-y-0 left-0 z-40 w-[344px] overflow-y-auto border-r border-slate-700/80 bg-slate-900/95 px-5 py-6 shadow-2xl backdrop-blur-sm">
         <div className="mb-6">
           <p className="text-xs uppercase tracking-[0.22em] text-cyan-300/85">
             Flood Risk Dashboard
           </p>
           <h1 className="mt-2 text-xl font-semibold text-slate-100">
-            Assessment & Simulation
+            EU Assessment & Simulation
           </h1>
           <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-slate-800/90 px-3 py-1 text-xs text-slate-200">
             <ShieldAlert className="h-3.5 w-3.5 text-cyan-300" />
             {activeScenarioLabel}
           </div>
+          <p className="mt-2 text-[11px] text-slate-400">
+            Baseline risk source: {informRiskDataSource.dataset}
+          </p>
         </div>
 
         {selectedZone ? (
           <section className="space-y-4">
             <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-4">
-              <p className="text-sm text-slate-300">Selected Zone</p>
+              <p className="text-sm text-slate-300">Zonă selectată</p>
               <p className="mt-1 text-base font-medium text-slate-100">{selectedZone.name}</p>
               <span
                 className={`mt-3 inline-flex rounded-md px-2 py-1 text-xs font-medium ${getRiskChipClasses(
@@ -310,6 +442,14 @@ export default function Dashboard() {
               >
                 Risk Score {selectedZone.riskLevel}
               </span>
+              <button
+                type="button"
+                onClick={() => handleZoneSelection(null)}
+                className="mt-3 inline-flex items-center gap-2 rounded-md border border-slate-600/80 bg-slate-900/75 px-2.5 py-1.5 text-xs text-slate-200 transition hover:bg-slate-800"
+              >
+                <Globe2 className="h-3.5 w-3.5" />
+                Revino la harta globală
+              </button>
             </div>
 
             <div className="space-y-3">
@@ -377,9 +517,90 @@ export default function Dashboard() {
           </section>
         ) : (
           <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-4 text-sm text-slate-300">
-            Select a flood zone from the map to view live statistics.
+            Selectează o țară din UE ca să vezi statistici detaliate și opțiuni de simulare.
           </div>
         )}
+
+        <section className="mt-5 rounded-xl border border-slate-700/80 bg-slate-800/70 p-4">
+          <h2 className="text-sm font-semibold text-slate-100">Raportează incident</h2>
+          <p className="mt-1 text-xs text-slate-300">
+            Oricine poate încărca poze și trimite locația curentă.
+          </p>
+
+          <textarea
+            value={incidentDescription}
+            onChange={(event) => setIncidentDescription(event.target.value)}
+            placeholder="Descrie incidentul (ex: creștere rapidă nivel apă)."
+            className="mt-3 h-20 w-full resize-none rounded-lg border border-slate-600/80 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-400"
+          />
+
+          <label className="mt-3 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-600/80 bg-slate-900/75 px-3 py-2 text-xs text-slate-100 transition hover:bg-slate-800">
+            <Camera className="h-3.5 w-3.5" />
+            Încarcă poze
+            <input type="file" accept="image/*" multiple className="hidden" onChange={onImageUpload} />
+          </label>
+
+          {incidentImages.length > 0 ? (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {incidentImages.map((preview, index) => (
+                <div key={`${preview.slice(0, 24)}-${index}`} className="relative overflow-hidden rounded-md border border-slate-600/70">
+                  <img src={preview} alt="Incident upload" className="h-16 w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setIncidentImages((current) => current.filter((_, imageIndex) => imageIndex !== index))
+                    }
+                    className="absolute right-1 top-1 rounded bg-slate-950/80 p-0.5 text-slate-100"
+                    aria-label="Șterge imagine"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={requestLocation}
+            disabled={locatingUser}
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-500/25 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-500/40 disabled:opacity-70"
+          >
+            <LocateFixed className="h-3.5 w-3.5" />
+            {locatingUser ? "Se detectează locația..." : "Folosește locația curentă"}
+          </button>
+
+          <p className="mt-2 text-[11px] text-slate-300">
+            {incidentLocation
+              ? `Locație: ${incidentLocation[1].toFixed(4)}, ${incidentLocation[0].toFixed(4)}`
+              : "Locația nu este setată."}
+          </p>
+
+          <button
+            type="button"
+            onClick={submitIncidentReport}
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500/30 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/45"
+          >
+            <Send className="h-3.5 w-3.5" />
+            Trimite raportul
+          </button>
+        </section>
+
+        {reportedIncidents.length > 0 ? (
+          <section className="mt-4 rounded-xl border border-slate-700/80 bg-slate-800/70 p-4">
+            <h2 className="text-sm font-semibold text-slate-100">Incidente recente</h2>
+            <div className="mt-2 space-y-2">
+              {reportedIncidents.slice(0, 4).map((incident) => (
+                <div key={incident.id} className="rounded-md border border-slate-700/80 bg-slate-900/70 px-3 py-2">
+                  <p className="text-xs text-slate-100">{incident.description}</p>
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    {formatIncidentDate(incident.createdAt)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </aside>
 
       <div
@@ -390,22 +611,33 @@ export default function Dashboard() {
         <RiskMap
           zones={zonesWithRisk}
           selectedZoneId={selectedZoneId}
-          onSelectZone={setSelectedZoneId}
+          incidents={reportedIncidents}
+          onSelectZone={handleZoneSelection}
           onFocusAnchorChange={setFocusAnchor}
         />
 
         <AnimatePresence>
           {contextMenuRect && selectedZone ? (
             <motion.div
-              className="absolute z-50 w-56 rounded-xl border border-slate-700/85 bg-slate-900/90 p-3 shadow-2xl backdrop-blur-sm"
+              className="absolute z-50 w-[248px] rounded-xl border border-slate-700/85 bg-slate-900/90 p-3 shadow-2xl backdrop-blur-sm"
               style={{ left: contextMenuRect.x, top: contextMenuRect.y }}
               initial={{ opacity: 0, y: 10, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.97 }}
             >
-              <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-300">
-                Contextual Actions
-              </p>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-300">
+                  Acțiuni contextuale
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setContextMenuVisible(false)}
+                  className="rounded-md p-1 text-slate-300 transition hover:bg-slate-700 hover:text-slate-100"
+                  aria-label="Ascunde acțiuni"
+                >
+                  <PanelRightClose className="h-3.5 w-3.5" />
+                </button>
+              </div>
               <div className="space-y-2">
                 <button
                   type="button"
@@ -414,7 +646,7 @@ export default function Dashboard() {
                 >
                   <span className="inline-flex items-center gap-2">
                     <History className="h-4 w-4" />
-                    Past Simulations
+                    Simulări trecute
                   </span>
                   <span className="text-xs text-cyan-200/85">Free</span>
                 </button>
@@ -426,7 +658,7 @@ export default function Dashboard() {
                 >
                   <span className="inline-flex items-center gap-2">
                     <Sparkles className="h-4 w-4" />
-                    Create Simulation
+                    Creează simulare
                   </span>
                   <span className="inline-flex items-center gap-1 text-xs text-violet-200">
                     <Lock className="h-3 w-3" />
@@ -438,13 +670,24 @@ export default function Dashboard() {
           ) : null}
         </AnimatePresence>
 
+        {selectedZone && !contextMenuVisible ? (
+          <button
+            type="button"
+            onClick={() => setContextMenuVisible(true)}
+            className="absolute right-4 top-20 z-50 inline-flex items-center gap-2 rounded-lg border border-slate-600/85 bg-slate-900/90 px-3 py-2 text-xs text-slate-100 shadow-xl backdrop-blur-sm transition hover:bg-slate-800"
+          >
+            <PanelRightOpen className="h-3.5 w-3.5" />
+            Arată acțiuni
+          </button>
+        ) : null}
+
         <AnimatePresence>
           {openWindows.past ? (
             <DraggableWindow
               id="past-simulations-window"
-              title="Past Simulations"
-              width={420}
-              height={330}
+              title="Simulări trecute"
+              width={432}
+              height={344}
               bounds={windowBounds}
               initialPosition={initialWindowPositions.past}
               avoidRects={avoidRects}
@@ -462,7 +705,7 @@ export default function Dashboard() {
                   }`}
                   onClick={() => setActiveScenarioId("live")}
                 >
-                  Live Risk Feed
+                  Flux Live
                 </button>
                 {historicalSimulations.map((simulation) => (
                   <button
@@ -476,13 +719,7 @@ export default function Dashboard() {
                     onClick={() => setActiveScenarioId(simulation.id)}
                   >
                     <p className="font-medium">{simulation.label}</p>
-                    <p className="mt-1 text-xs text-slate-300">
-                      {new Date(simulation.eventDate).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "2-digit",
-                        year: "numeric",
-                      })}
-                    </p>
+                    <p className="mt-1 text-xs text-slate-300">{simulation.notes}</p>
                   </button>
                 ))}
               </div>
@@ -495,7 +732,7 @@ export default function Dashboard() {
             <DraggableWindow
               id="create-simulation-window"
               title="Create Simulation"
-              width={440}
+              width={444}
               height={340}
               bounds={windowBounds}
               initialPosition={initialWindowPositions.create}
@@ -514,7 +751,8 @@ export default function Dashboard() {
               {simulationState === "idle" ? (
                 <div className="space-y-4">
                   <p className="text-sm text-slate-300">
-                    Simulation engine is ready. Start a new run for {selectedZone?.name ?? "the selected zone"}.
+                    Simulation engine este gata. Pornește o nouă rulare pentru{" "}
+                    {selectedZone?.name ?? "zona selectată"}.
                   </p>
                   <button
                     type="button"
