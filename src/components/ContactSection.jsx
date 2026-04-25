@@ -5,8 +5,6 @@ import ScrambleTitle from "./ScrambleTitle";
 const ContactSection = ({ sectionRef }) => {
   const localRef = useRef(null);
   const isInView = useInView(localRef, { amount: 0.32, margin: "-8% 0px" });
-  
-  // Adăugăm un state pentru a afișa statusul trimiterii
   const [status, setStatus] = useState("");
 
   const handleSubmit = async (event) => {
@@ -14,7 +12,6 @@ const ContactSection = ({ sectionRef }) => {
     setStatus("Se trimite...");
 
     const formData = new FormData(event.target);
-    // TODO: Înlocuiește cu cheia primită pe email de la Web3Forms
     formData.append("access_key", "cb5ff32d-5f64-4606-af08-3bb96cb11df2");
 
     try {
@@ -26,15 +23,15 @@ const ContactSection = ({ sectionRef }) => {
       const data = await response.json();
 
       if (data.success) {
-        setStatus("Mesaj trimis cu succes! Vom reveni curând.");
-        event.target.reset(); // Curățăm formularul
+        setStatus("Mesaj trimis cu succes! Vom reveni curand.");
+        event.target.reset();
       } else {
         console.error("Eroare Web3Forms:", data);
-        setStatus("A apărut o eroare. Te rugăm să încerci din nou.");
+        setStatus("A aparut o eroare. Te rugam sa incerci din nou.");
       }
     } catch (error) {
-      console.error("Eroare de rețea:", error);
-      setStatus("Eroare de rețea. Verifică conexiunea.");
+      console.error("Eroare de retea:", error);
+      setStatus("Eroare de retea. Verifica conexiunea.");
     }
   };
 
@@ -63,7 +60,7 @@ const ContactSection = ({ sectionRef }) => {
           <div className="space-y-2 font-body text-sm text-slate-400 sm:text-base">
             <p>hello@castopini.com</p>
             <p>+40 721 000 111</p>
-            <p>Bucuresti, Romania</p>
+            <p>Bucharest, Romania</p>
           </div>
         </motion.div>
 
@@ -110,15 +107,18 @@ const ContactSection = ({ sectionRef }) => {
 
             <button
               type="submit"
-              className="rounded-full bg-cyan-300 px-6 py-3 font-body text-sm font-bold uppercase tracking-[0.08em] text-slate-950 transition hover:bg-cyan-200 sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
+              className="rounded-full bg-cyan-300 px-6 py-3 font-body text-sm font-bold uppercase tracking-[0.08em] text-slate-950 transition hover:bg-cyan-200 sm:text-base disabled:cursor-not-allowed disabled:opacity-50"
               disabled={status === "Se trimite..."}
             >
               {status === "Se trimite..." ? "Se trimite..." : "Trimite Mesaj"}
             </button>
 
-            {/* Mesajul de status (succes sau eroare) */}
             {status && status !== "Se trimite..." && (
-              <p className={`font-body text-sm font-semibold ${status.includes("succes") ? "text-green-400" : "text-red-400"}`}>
+              <p
+                className={`font-body text-sm font-semibold ${
+                  status.includes("succes") ? "text-green-400" : "text-red-400"
+                }`}
+              >
                 {status}
               </p>
             )}
