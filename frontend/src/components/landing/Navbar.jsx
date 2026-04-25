@@ -11,7 +11,7 @@ const Navbar = ({ onContactClick }) => {
           href="#hero"
           className="font-heading text-xl font-bold uppercase tracking-[0.08em] text-slate-100 sm:text-2xl"
         >
-          Castopini
+          Synoptis
         </a>
 
         <nav className="flex items-center gap-3 text-sm font-semibold sm:text-base">
