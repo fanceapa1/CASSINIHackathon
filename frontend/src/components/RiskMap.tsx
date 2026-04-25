@@ -743,7 +743,7 @@ export function RiskMap({
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-slate-950/35 via-transparent to-slate-950/20" />
       ) : null}
 
-      <div className="absolute left-4 top-4 z-20 w-full max-w-sm">
+      <div className="absolute left-14 top-4 z-20 w-full max-w-sm">
         <form
           onSubmit={submitSearch}
           className="relative flex items-center rounded-xl border border-slate-600/70 bg-slate-900/85 shadow-lg backdrop-blur-sm"
