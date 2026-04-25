@@ -21,12 +21,13 @@ import {
   Waves,
   X,
 } from "lucide-react";
-import { getCountryAdminRegions } from "../data/adminBoundaries";
+import { getAllCountryAdminRegions } from "../data/adminBoundaries";
 import { floodZones, historicalSimulations, informRiskDataSource } from "../data/floodMockData";
 import { DraggableWindow } from "./DraggableWindow";
 import { RiskMap } from "./RiskMap";
 import type { ChangeEvent } from "react";
 import type {
+  FloodZone,
   FloodZoneWithRisk,
   GeneratedSimulationResult,
   LngLat,
@@ -178,7 +179,7 @@ function buildRegionalHistory(regionName: string, regionId: string, baselineRisk
   ];
 }
 
-function buildRegionsFromOfficialBoundaries(zone: FloodZoneWithRisk, candidateRegions: ZoneRegion[]): ZoneRegion[] {
+function buildRegionsFromOfficialBoundaries(zone: FloodZone, candidateRegions: ZoneRegion[]): ZoneRegion[] {
   const areaWeights = candidateRegions.map((region) => geometryAreaProxy(region));
   const totalAreaWeight = areaWeights.reduce((sum, value) => sum + value, 0);
   const safeTotalWeight = totalAreaWeight <= 0 ? 1 : totalAreaWeight;
@@ -257,9 +258,6 @@ export default function Dashboard() {
     Record<string, ZoneRegion[]>
   >({});
   const [loadingOfficialRegionsByCountry, setLoadingOfficialRegionsByCountry] = useState<
-    Record<string, boolean>
-  >({});
-  const [officialRegionLoadFailedByCountry, setOfficialRegionLoadFailedByCountry] = useState<
     Record<string, boolean>
   >({});
 
@@ -433,9 +431,9 @@ export default function Dashboard() {
     return null;
   }, [selectedZoneId, selectedRegion, zonesById]);
 
-  const zonesByCountryCode = useMemo(
-    () => new globalThis.Map(zonesWithRisk.map((zone) => [zone.countryCode, zone])),
-    [zonesWithRisk],
+  const zoneSeedsByCountryCode = useMemo(
+    () => new globalThis.Map(floodZones.map((zone) => [zone.countryCode, zone])),
+    [],
   );
 
   const selectedCountryCode = selectedZone?.countryCode ?? null;
@@ -447,99 +445,77 @@ export default function Dashboard() {
     : false;
 
   useEffect(() => {
-    if (!selectedCountryCode) {
+    if (Object.keys(officialRegionsByCountry).length > 0) {
       return;
     }
-    if (officialRegionsByCountry[selectedCountryCode]?.length) {
-      return;
-    }
-    if (loadingOfficialRegionsByCountry[selectedCountryCode]) {
-      return;
-    }
-    if (officialRegionLoadFailedByCountry[selectedCountryCode]) {
+    if (Object.values(loadingOfficialRegionsByCountry).some(Boolean)) {
       return;
     }
 
-    const zone = zonesByCountryCode.get(selectedCountryCode);
-    if (!zone) {
-      return;
-    }
-
+    const countryCodes = floodZones.map((zone) => zone.countryCode);
     let cancelled = false;
-    setLoadingOfficialRegionsByCountry((current) => ({
-      ...current,
-      [selectedCountryCode]: true,
-    }));
 
-    getCountryAdminRegions(selectedCountryCode)
-      .then((regions) => {
+    setLoadingOfficialRegionsByCountry(
+      Object.fromEntries(countryCodes.map((countryCode) => [countryCode, true])),
+    );
+
+    getAllCountryAdminRegions(countryCodes)
+      .then((regionsByCountry) => {
         if (cancelled) {
           return;
         }
-        if (regions.length === 0) {
-          setOfficialRegionLoadFailedByCountry((current) => ({
-            ...current,
-            [selectedCountryCode]: true,
-          }));
-          return;
-        }
-        const mappedRegions: ZoneRegion[] = regions.map((region) => ({
-          id: region.id,
-          name: region.name,
-          countryCode: region.countryCode,
-          center: region.center,
-          polygon:
-            region.geometry.type === "Polygon"
-              ? region.geometry.coordinates[0]
-              : region.geometry.coordinates[0]?.[0] ?? [],
-          geometry: region.geometry,
-          population: 0,
-          baselineRiskLevel: zone.baselineRiskLevel,
-          estimatedLossEurMillions: 0,
-          historicalEvents: [],
-        }));
 
-        const normalizedRegions = buildRegionsFromOfficialBoundaries(zone, mappedRegions);
-        if (normalizedRegions.length > 0) {
-          setOfficialRegionsByCountry((current) => ({
-            ...current,
-            [selectedCountryCode]: normalizedRegions,
+        const normalizedRegionsByCountry = Object.entries(regionsByCountry).reduce<
+          Record<string, ZoneRegion[]>
+        >((accumulator, [countryCode, regions]) => {
+          const zone = zoneSeedsByCountryCode.get(countryCode);
+          if (!zone || regions.length === 0) {
+            return accumulator;
+          }
+
+          const mappedRegions: ZoneRegion[] = regions.map((region) => ({
+            id: region.id,
+            name: region.name,
+            countryCode: region.countryCode,
+            center: region.center,
+            polygon:
+              region.geometry.type === "Polygon"
+                ? region.geometry.coordinates[0]
+                : region.geometry.coordinates[0]?.[0] ?? [],
+            geometry: region.geometry,
+            population: 0,
+            baselineRiskLevel: zone.baselineRiskLevel,
+            estimatedLossEurMillions: 0,
+            historicalEvents: [],
           }));
-          setOfficialRegionLoadFailedByCountry((current) => ({
-            ...current,
-            [selectedCountryCode]: false,
-          }));
-        }
+
+          const normalizedRegions = buildRegionsFromOfficialBoundaries(zone, mappedRegions);
+          if (normalizedRegions.length > 0) {
+            accumulator[countryCode] = normalizedRegions;
+          }
+          return accumulator;
+        }, {});
+
+        setOfficialRegionsByCountry(normalizedRegionsByCountry);
       })
       .catch(() => {
         if (cancelled) {
           return;
         }
-        setOfficialRegionLoadFailedByCountry((current) => ({
-          ...current,
-          [selectedCountryCode]: true,
-        }));
       })
       .finally(() => {
         if (cancelled) {
           return;
         }
-        setLoadingOfficialRegionsByCountry((current) => ({
-          ...current,
-          [selectedCountryCode]: false,
-        }));
+        setLoadingOfficialRegionsByCountry(
+          Object.fromEntries(countryCodes.map((countryCode) => [countryCode, false])),
+        );
       });
 
     return () => {
       cancelled = true;
     };
-  }, [
-    selectedCountryCode,
-    zonesByCountryCode,
-    officialRegionsByCountry,
-    loadingOfficialRegionsByCountry,
-    officialRegionLoadFailedByCountry,
-  ]);
+  }, [officialRegionsByCountry, loadingOfficialRegionsByCountry, zoneSeedsByCountryCode]);
 
   useEffect(() => {
     if (!selectedRegionId) {
@@ -1082,10 +1058,10 @@ export default function Dashboard() {
               <p className="text-sm font-medium text-slate-100">Regional boundaries (click to select)</p>
               <p className="mt-1 text-[11px] text-slate-400">
                 {selectedZoneRegionsLoading
-                  ? "Loading official ADM1 borders..."
+                  ? "The map is already using built-in ADM1 boundaries; the sidebar list is syncing."
                   : selectedZoneHasOfficialRegions
                     ? "Official administrative boundaries loaded."
-                    : "Fallback regional geometry is shown until official boundaries are available."}
+                    : "Built-in ADM1 administrative boundaries are active on the map."}
               </p>
               <div className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1">
                 {selectedZoneRegions.map((region) => (
@@ -1189,8 +1165,8 @@ export default function Dashboard() {
           </section>
         ) : (
           <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-4 text-sm text-slate-300">
-            Select a country or a region from the map (for example Bacau, Galati, Vrancea) to see
-            regional historical data.
+            Select a county, region, or country from the map (for example Bacau, Galati, Vrancea)
+            to inspect the original ADM1 boundaries and historical data for that area.
           </div>
         )}
 
