@@ -11,6 +11,7 @@ import {
   Lock,
   LogOut,
   MapPinned,
+  Menu,
   PanelRightClose,
   PanelRightOpen,
   Settings,
@@ -222,6 +223,7 @@ export default function Dashboard() {
   const [windowStack, setWindowStack] = useState<WindowKey[]>([]);
   const [simulationState, setSimulationState] = useState<SimulationRunState>("idle");
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [officialRegionsByCountry, setOfficialRegionsByCountry] = useState<
     Record<string, ZoneRegion[]>
@@ -860,11 +862,25 @@ export default function Dashboard() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
-      <aside className="absolute inset-y-0 left-0 z-40 w-[356px] overflow-y-auto border-r border-slate-700/80 bg-slate-900/95 px-5 py-6 shadow-2xl backdrop-blur-sm">
+      <motion.aside
+        animate={{ x: sidebarOpen ? 0 : -SIDEBAR_WIDTH }}
+        transition={{ type: "spring", stiffness: 320, damping: 32 }}
+        className="absolute inset-y-0 left-0 z-40 w-[356px] overflow-y-auto border-r border-slate-700/80 bg-slate-900/95 px-5 py-6 shadow-2xl backdrop-blur-sm"
+      >
         <div className="mb-6">
-          <p className="text-xs uppercase tracking-[0.22em] text-cyan-300/85">
-            Flood Risk Dashboard
-          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(false)}
+              className="rounded-md p-1 text-slate-400 transition hover:bg-slate-700 hover:text-slate-100"
+              aria-label="Collapse sidebar"
+            >
+              <Menu className="h-4 w-4" />
+            </button>
+            <p className="text-xs uppercase tracking-[0.22em] text-cyan-300/85">
+              Flood Risk Dashboard
+            </p>
+          </div>
           <h1 className="mt-2 text-xl font-semibold text-slate-100">
             EU + UK Assessment & Simulation
           </h1>
@@ -1140,12 +1156,26 @@ export default function Dashboard() {
             </div>
           ) : null}
         </div>
-      </aside>
+      </motion.aside>
+
+      {!sidebarOpen && (
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          className="absolute left-4 top-4 z-50 rounded-md bg-slate-800/90 p-2 text-slate-300 shadow-lg backdrop-blur-sm transition hover:bg-slate-700 hover:text-slate-100"
+          aria-label="Open sidebar"
+        >
+          <Menu className="h-4 w-4" />
+        </button>
+      )}
 
       <div
         ref={mapAreaRef}
         className="absolute inset-y-0 right-0"
-        style={{ left: `${SIDEBAR_WIDTH}px` }}
+        style={{
+          left: sidebarOpen ? `${SIDEBAR_WIDTH}px` : "0px",
+          transition: "left 0.3s cubic-bezier(0.4,0,0.2,1)",
+        }}
       >
         <RiskMap
           zones={zonesWithRisk}
