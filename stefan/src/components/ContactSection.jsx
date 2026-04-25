@@ -1,11 +1,10 @@
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-import { useScrambleText } from "../hooks/useScrambleText";
+import ScrambleTitle from "./ScrambleTitle";
 
 const ContactSection = ({ sectionRef }) => {
   const localRef = useRef(null);
   const isInView = useInView(localRef, { amount: 0.32, margin: "-8% 0px" });
-  const title = useScrambleText("Contact", isInView, 460);
 
   return (
     <footer
@@ -20,9 +19,11 @@ const ContactSection = ({ sectionRef }) => {
           transition={{ duration: 0.6 }}
           className="space-y-4"
         >
-          <h2 className="font-heading text-3xl font-bold uppercase tracking-[0.08em] text-slate-100 sm:text-4xl">
-            {title}
-          </h2>
+          <ScrambleTitle
+            as="h2"
+            text="Contact"
+            className="font-heading text-3xl font-bold uppercase tracking-[0.04em] text-slate-100 sm:text-4xl"
+          />
           <p className="max-w-md font-body text-base leading-relaxed text-slate-300 sm:text-lg">
             Daca vrei o demonstratie personalizata sau o oferta pentru organizatia ta, trimite-ne
             cateva detalii si revenim rapid.

@@ -1,12 +1,11 @@
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-import { useScrambleText } from "../hooks/useScrambleText";
 import GlobeComponent from "./GlobeComponent";
+import ScrambleTitle from "./ScrambleTitle";
 
 const HeroSection = ({ onPrimaryAction, onContactAction }) => {
   const sectionRef = useRef(null);
   const isInView = useInView(sectionRef, { once: true, margin: "-10% 0px" });
-  const title = useScrambleText("Castopini - Platforma Impotriva Dezastrelor", isInView, 650);
 
   return (
     <section
@@ -29,9 +28,13 @@ const HeroSection = ({ onPrimaryAction, onContactAction }) => {
           <p className="font-body text-sm font-semibold uppercase tracking-[0.2em] text-cyan-100/75">
             Incident Intelligence Platform
           </p>
-          <h1 className="font-heading text-4xl font-bold uppercase leading-[1.05] text-white sm:text-5xl lg:text-6xl">
-            {title}
-          </h1>
+          <ScrambleTitle
+            as="h1"
+            text="Castopini - Platforma Impotriva Dezastrelor"
+            delay={650}
+            once={true}
+            className="font-heading text-4xl font-bold uppercase leading-[1.05] text-white sm:text-5xl lg:text-6xl"
+          />
           <p className="max-w-xl font-body text-base leading-relaxed text-slate-300 sm:text-lg">
             Monitorizare live, coordonare pe echipe si raspuns rapid intr-un singur tablou de control.
             Castopini conecteaza datele operationale cu decizii clare, atunci cand fiecare secunda

@@ -1,4 +1,3 @@
-import { LayoutGroup, motion } from "framer-motion";
 import { useRef } from "react";
 import ContactSection from "./components/ContactSection";
 import FeatureSection from "./components/FeatureSection";
@@ -31,13 +30,11 @@ const App = () => {
         <HeroSection onPrimaryAction={scrollToFeatures} onContactAction={scrollToContact} />
 
         <section id="features" ref={featuresRef} aria-label="Functionalitati" className="scroll-mt-28">
-          <LayoutGroup id="feature-flow">
-            <motion.div layout className="space-y-2">
-              {featureSections.map((section, index) => (
-                <FeatureSection key={section.id} section={section} reverse={index % 2 === 1} />
-              ))}
-            </motion.div>
-          </LayoutGroup>
+          <div className="space-y-2">
+            {featureSections.map((section, index) => (
+              <FeatureSection key={section.id} section={section} reverse={index % 2 === 1} />
+            ))}
+          </div>
         </section>
 
         <PricingSection onContactClick={scrollToContact} />
