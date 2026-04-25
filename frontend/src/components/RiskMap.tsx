@@ -707,6 +707,7 @@ export function RiskMap({
         mapStyle={BASE_MAP_STYLE}
         projection="mercator"
         initialViewState={EUROPE_GLOBE_VIEW}
+        minZoom={2.8}
         interactiveLayerIds={interactiveLayerIds}
         onClick={handleMapClick}
         onMove={() => {
