@@ -8,7 +8,6 @@ import {
   History,
   Landmark,
   LogOut,
-  MapPinned,
   PanelRightClose,
   PanelRightOpen,
   ShieldAlert,
@@ -20,6 +19,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { getCountryAdminRegions } from "../data/adminBoundaries";
+import { buildDisplayRegionsFromAdminBoundaries } from "../data/displayRegions";
 import { floodZones, historicalSimulations, informRiskDataSource } from "../data/floodMockData";
 import { DraggableWindow } from "./DraggableWindow";
 import { RiskMap } from "./RiskMap";
@@ -371,7 +371,7 @@ function getAggregatedCenter(regions: ZoneRegion[]): LngLat {
   ];
 }
 
-function aggregateMappedRegions(zone: FloodZone, candidateRegions: ZoneRegion[]): ZoneRegion[] {
+export function aggregateMappedRegions(zone: FloodZone, candidateRegions: ZoneRegion[]): ZoneRegion[] {
   const aggregateCount = Math.min(getMappedRegionLimit(zone.countryCode), candidateRegions.length);
   if (candidateRegions.length <= aggregateCount) {
     return candidateRegions;
@@ -453,7 +453,7 @@ function buildRegionalHistory(regionName: string, regionId: string, baselineRisk
   ];
 }
 
-function buildRegionsFromOfficialBoundaries(zone: FloodZone, candidateRegions: ZoneRegion[]): ZoneRegion[] {
+export function buildRegionsFromOfficialBoundaries(zone: FloodZone, candidateRegions: ZoneRegion[]): ZoneRegion[] {
   const areaWeights = candidateRegions.map((region) => geometryAreaProxy(region));
   const totalAreaWeight = areaWeights.reduce((sum, value) => sum + value, 0);
   const safeTotalWeight = totalAreaWeight <= 0 ? 1 : totalAreaWeight;
@@ -756,8 +756,7 @@ export default function Dashboard() {
             historicalEvents: [],
           }));
 
-          const aggregatedMappedRegions = aggregateMappedRegions(zone, mappedRegions);
-          const normalizedRegions = buildRegionsFromOfficialBoundaries(zone, aggregatedMappedRegions);
+          const normalizedRegions = buildDisplayRegionsFromAdminBoundaries(zone, mappedRegions);
           setOfficialRegionsByCountry((current) => ({
             ...current,
             [countryCode]: normalizedRegions,
@@ -1202,14 +1201,35 @@ export default function Dashboard() {
           {selectedZone ? (
           <section className="space-y-4">
             <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-4">
-              <p className="text-sm text-slate-300">Selected country</p>
-              <p className="mt-1 text-base font-medium text-slate-100">{selectedZone.name}</p>
               {selectedRegion ? (
-                <div className="mt-2 inline-flex items-center gap-2 rounded-md bg-slate-900/80 px-2 py-1 text-xs text-cyan-200">
-                  <MapPinned className="h-3.5 w-3.5" />
-                  Region: {selectedRegion.name}
+                <div className="mb-4 rounded-xl border border-cyan-400/40 bg-cyan-500/12 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-cyan-200">
+                    Selected region
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-slate-50">{selectedRegion.name}</p>
+                  <p className="mt-1 text-xs text-slate-300">{selectedZone.name}</p>
+                  <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-100">
+                    <span
+                      className={`rounded-md px-2 py-1 font-medium ${getRiskChipClasses(
+                        selectedRegion.riskLevel,
+                      )}`}
+                    >
+                      Risk {selectedRegion.riskLevel}
+                    </span>
+                    <span className="rounded-md bg-slate-950/75 px-2 py-1">
+                      Population {formatNumber(selectedRegion.population)}
+                    </span>
+                    <span className="rounded-md bg-slate-950/75 px-2 py-1">
+                      Loss {formatCurrencyMillions(selectedRegion.estimatedLossEurMillions)}
+                    </span>
+                  </div>
                 </div>
               ) : null}
+
+              <p className="text-sm text-slate-300">
+                {selectedRegion ? "Country context" : "Selected country"}
+              </p>
+              <p className="mt-1 text-base font-medium text-slate-100">{selectedZone.name}</p>
               <span
                 className={`mt-3 inline-flex rounded-md px-2 py-1 text-xs font-medium ${getRiskChipClasses(
                   selectedRegion?.riskLevel ?? selectedZone.riskLevel,
@@ -1300,12 +1320,12 @@ export default function Dashboard() {
             </div>
 
             <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
-              <p className="text-sm font-medium text-slate-100">Aggregated regions (click to select)</p>
+              <p className="text-sm font-medium text-slate-100">Display regions (click to inspect)</p>
               <p className="mt-1 text-[11px] text-slate-400">
                 {selectedZoneRegionsLoading
                   ? "Loading administrative boundaries for this country."
                   : selectedZoneHasOfficialRegions
-                    ? "Official boundaries grouped into full-country regions."
+                    ? "Administrative boundaries balanced into map-friendly regions."
                     : "No official administrative boundaries are available for this country yet."}
               </p>
               <div className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1">
