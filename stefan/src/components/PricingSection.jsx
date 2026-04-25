@@ -17,7 +17,7 @@ const PricingSection = ({ onContactClick }) => {
           initial={{ opacity: 0, y: 24 }}
           animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0 }}
           transition={{ duration: 0.6, ease: "easeOut" }}
-          className="mb-10 text-center"
+          className="mb-10 text-center will-change-transform"
         >
           <ScrambleTitle
             as="h2"
@@ -35,7 +35,7 @@ const PricingSection = ({ onContactClick }) => {
             initial={{ opacity: 0, y: 24 }}
             animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0 }}
             transition={{ duration: 0.62, delay: 0.1, ease: "easeOut" }}
-            className="rounded-[26px] border border-cyan-100/20 bg-[#071326]/80 p-8 shadow-[0_26px_60px_-38px_rgba(0,0,0,0.9)] backdrop-blur"
+            className="rounded-[26px] border border-cyan-100/20 bg-[#071326]/80 p-8 shadow-[0_26px_60px_-38px_rgba(0,0,0,0.9)] backdrop-blur will-change-transform"
           >
             <h3 className="font-heading text-2xl font-bold uppercase text-slate-100">Plan Free</h3>
             <p className="mt-3 font-body text-slate-300">
@@ -53,7 +53,7 @@ const PricingSection = ({ onContactClick }) => {
             initial={{ opacity: 0, y: 24 }}
             animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0 }}
             transition={{ duration: 0.62, delay: 0.18, ease: "easeOut" }}
-            className="rounded-[26px] border border-cyan-200/25 bg-[linear-gradient(155deg,rgba(6,22,42,0.95)_0%,rgba(8,31,56,0.9)_72%,rgba(30,79,112,0.52)_100%)] p-8 shadow-[0_26px_60px_-38px_rgba(0,0,0,0.92)]"
+            className="rounded-[26px] border border-cyan-200/25 bg-[linear-gradient(155deg,rgba(6,22,42,0.95)_0%,rgba(8,31,56,0.9)_72%,rgba(30,79,112,0.52)_100%)] p-8 shadow-[0_26px_60px_-38px_rgba(0,0,0,0.92)] will-change-transform"
           >
             <h3 className="font-heading text-2xl font-bold uppercase text-slate-100">Plan Paid</h3>
             <p className="mt-3 font-body text-slate-200">

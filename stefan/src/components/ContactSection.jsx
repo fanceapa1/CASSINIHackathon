@@ -17,7 +17,7 @@ const ContactSection = ({ sectionRef }) => {
           initial={{ opacity: 0, y: 24 }}
           animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0 }}
           transition={{ duration: 0.6 }}
-          className="space-y-4"
+          className="space-y-4 will-change-transform"
         >
           <ScrambleTitle
             as="h2"
@@ -40,7 +40,7 @@ const ContactSection = ({ sectionRef }) => {
           initial={{ opacity: 0, y: 28 }}
           animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0 }}
           transition={{ duration: 0.65, delay: 0.08 }}
-          className="rounded-[24px] border border-cyan-100/20 bg-[#071328]/80 p-6 shadow-[0_28px_60px_-38px_rgba(0,0,0,0.92)] backdrop-blur sm:p-8"
+          className="rounded-[24px] border border-cyan-100/20 bg-[#071328]/80 p-6 shadow-[0_28px_60px_-38px_rgba(0,0,0,0.92)] backdrop-blur sm:p-8 will-change-transform"
         >
           <div className="grid gap-5">
             <label className="font-body text-sm font-semibold text-slate-200">
