@@ -4,7 +4,12 @@ import ScrambleTitle from "./ScrambleTitle";
 
 const PricingSection = ({ onContactClick }) => {
   const sectionRef = useRef(null);
-  const isInView = useInView(sectionRef, { amount: 0.35, margin: "-14% 0px" });
+  
+  // Am scos 'once: true'
+  const isInView = useInView(sectionRef, { 
+      amount: 0.2, 
+      margin: "-10% 0px" 
+  });
 
   return (
     <section
