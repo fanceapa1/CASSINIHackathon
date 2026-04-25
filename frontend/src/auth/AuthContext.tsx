@@ -19,6 +19,8 @@ type AuthContextValue = {
   user: DemoUser | null;
   isAuthenticated: boolean;
   isAdmin: boolean;
+  isPaidClient: boolean;
+  canCreateSimulation: boolean;
   login: (email: string, password: string) => LoginResult;
   logout: () => void;
   canAccessRegion: (region: string) => boolean;
@@ -66,6 +68,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
       user,
       isAuthenticated: Boolean(user),
       isAdmin: user?.role === 'admin',
+      isPaidClient: user?.role === 'paid_client' || user?.plan === 'paid',
+      canCreateSimulation:
+        user?.role === 'admin' || user?.role === 'paid_client' || user?.plan === 'paid',
       login,
       logout,
       canAccessRegion,

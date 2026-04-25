@@ -19,10 +19,13 @@ interface BoundaryMetadata {
   gjDownloadURL?: string;
 }
 
+export type AdminLevel = "ADM1" | "ADM2" | "ADM3";
+
 export interface AdminBoundaryRegion {
   id: string;
   name: string;
   countryCode: string;
+  adminLevel: AdminLevel;
   center: LngLat;
   geometry: RegionGeometry;
 }
@@ -58,9 +61,18 @@ const iso2ToIso3: Record<string, string> = {
   UK: "GBR",
 };
 
+const adminLevelByCountryCode: Partial<Record<string, AdminLevel>> = {
+  DE: "ADM3",
+  RO: "ADM1",
+};
+
 const boundaryCache = new globalThis.Map<string, Promise<AdminBoundaryRegion[]>>();
 const metadataCache = new globalThis.Map<string, Promise<BoundaryMetadata | null>>();
 const europeAdm1CollectionCache = new globalThis.Map<string, Promise<BoundaryCollection | null>>();
+
+function getAdminLevelForCountry(countryCode: string): AdminLevel {
+  return adminLevelByCountryCode[countryCode] ?? "ADM2";
+}
 
 function closeRing(ring: LngLat[]): LngLat[] {
   if (ring.length < 3) {
@@ -222,8 +234,12 @@ function toRegionName(properties: Record<string, unknown>, index: number): strin
     "shapeName",
     "shapeName_en",
     "name",
+    "NAME_3",
+    "NAME_2",
     "NAME_1",
     "NL_NAME_1",
+    "adm3_name",
+    "adm2_name",
     "adm1_name",
   ];
 
@@ -239,21 +255,27 @@ function toRegionName(properties: Record<string, unknown>, index: number): strin
 
 function toRegionId(
   countryCode: string,
+  adminLevel: AdminLevel,
   name: string,
   properties: Record<string, unknown>,
   index: number,
 ): string {
   const preferredId = properties.shapeID ?? properties.shapeISO ?? properties.id;
+  const levelKey = adminLevel.toLowerCase();
   if (typeof preferredId === "string" && preferredId.trim().length > 0) {
-    return `${countryCode.toLowerCase()}-adm1-${normalizeText(preferredId)}`;
+    return `${countryCode.toLowerCase()}-${levelKey}-${normalizeText(preferredId)}`;
   }
-  return `${countryCode.toLowerCase()}-adm1-${normalizeText(name)}-${index + 1}`;
+  return `${countryCode.toLowerCase()}-${levelKey}-${normalizeText(name)}-${index + 1}`;
 }
 
-async function fetchBoundaryMetadata(iso3: string): Promise<BoundaryMetadata | null> {
-  const response = await fetch(`https://www.geoboundaries.org/api/current/gbOpen/${iso3}/ADM1/`, {
-    cache: "force-cache",
-  });
+async function fetchBoundaryMetadata(
+  iso3: string,
+  adminLevel: AdminLevel,
+): Promise<BoundaryMetadata | null> {
+  const response = await fetch(
+    `https://www.geoboundaries.org/api/current/gbOpen/${iso3}/${adminLevel}/`,
+    { cache: "force-cache" },
+  );
 
   if (!response.ok) {
     return null;
@@ -267,23 +289,32 @@ async function fetchBoundaryMetadata(iso3: string): Promise<BoundaryMetadata | n
   return payload;
 }
 
-async function getBoundaryMetadata(iso3: string): Promise<BoundaryMetadata | null> {
-  const existing = metadataCache.get(iso3);
+async function getBoundaryMetadata(
+  iso3: string,
+  adminLevel: AdminLevel,
+): Promise<BoundaryMetadata | null> {
+  const cacheKey = `${iso3}:${adminLevel}`;
+  const existing = metadataCache.get(cacheKey);
   if (existing) {
     return existing;
   }
 
-  const request = fetchBoundaryMetadata(iso3).catch(() => null);
-  metadataCache.set(iso3, request);
+  const request = fetchBoundaryMetadata(iso3, adminLevel).catch(() => null);
+  metadataCache.set(cacheKey, request);
   return request;
 }
 
-function getBoundaryUrls(iso3: string, metadata: BoundaryMetadata | null): string[] {
+function getBoundaryUrls(
+  iso3: string,
+  adminLevel: AdminLevel,
+  metadata: BoundaryMetadata | null,
+): string[] {
   const urls = [
     metadata?.simplifiedGeometryGeoJSON,
     metadata?.gjDownloadURL,
-    `https://raw.githubusercontent.com/wmgeolab/geoBoundaries/main/releaseData/gbOpen/${iso3}/ADM1/geoBoundaries-${iso3}-ADM1.geojson`,
-    `https://cdn.jsdelivr.net/gh/wmgeolab/geoBoundaries@main/releaseData/gbOpen/${iso3}/ADM1/geoBoundaries-${iso3}-ADM1.geojson`,
+    `https://raw.githubusercontent.com/wmgeolab/geoBoundaries/main/releaseData/gbOpen/${iso3}/${adminLevel}/geoBoundaries-${iso3}-${adminLevel}.geojson`,
+    `https://cdn.jsdelivr.net/gh/wmgeolab/geoBoundaries@main/releaseData/gbOpen/${iso3}/${adminLevel}/geoBoundaries-${iso3}-${adminLevel}.geojson`,
+    `https://www.geoboundaries.org/data/geoBoundariesSSCGS-3_0_0/${iso3}/${adminLevel}/geoBoundariesSSCGS-3_0_0-${iso3}-${adminLevel}.geojson`,
   ].filter((value): value is string => typeof value === "string" && value.length > 0);
 
   return [...new Set(urls)];
@@ -314,6 +345,7 @@ async function getLocalEuropeAdm1Collection(): Promise<BoundaryCollection | null
 
 function mapBoundaryFeatures(
   countryCode: string,
+  adminLevel: AdminLevel,
   collection: BoundaryCollection,
 ): AdminBoundaryRegion[] {
   return collection.features
@@ -326,9 +358,10 @@ function mapBoundaryFeatures(
 
       const name = toRegionName(properties, index);
       return {
-        id: toRegionId(countryCode, name, properties, index),
+        id: toRegionId(countryCode, adminLevel, name, properties, index),
         name,
         countryCode,
+        adminLevel,
         center: getCenterFromGeometry(geometry),
         geometry,
       };
@@ -342,29 +375,30 @@ async function loadCountryAdminRegions(countryCode: string): Promise<AdminBounda
     return [];
   }
 
+  const adminLevel = getAdminLevelForCountry(countryCode);
   const localCollection = await getLocalEuropeAdm1Collection();
-  if (localCollection) {
+  if (adminLevel === "ADM1" && localCollection) {
     const filteredCollection: BoundaryCollection = {
       type: "FeatureCollection",
       features: localCollection.features.filter(
         (feature) => feature.properties?.countryCode === countryCode,
       ),
     };
-    const localRegions = mapBoundaryFeatures(countryCode, filteredCollection);
+    const localRegions = mapBoundaryFeatures(countryCode, "ADM1", filteredCollection);
     if (localRegions.length > 0) {
       return localRegions;
     }
   }
 
-  const metadata = await getBoundaryMetadata(iso3);
-  const urls = getBoundaryUrls(iso3, metadata);
+  const metadata = await getBoundaryMetadata(iso3, adminLevel);
+  const urls = getBoundaryUrls(iso3, adminLevel, metadata);
   for (const url of urls) {
     try {
       const collection = await fetchBoundaryCollection(url);
       if (!collection) {
         continue;
       }
-      const regions = mapBoundaryFeatures(countryCode, collection);
+      const regions = mapBoundaryFeatures(countryCode, adminLevel, collection);
       if (regions.length > 0) {
         return regions;
       }
@@ -373,18 +407,32 @@ async function loadCountryAdminRegions(countryCode: string): Promise<AdminBounda
     }
   }
 
+  if (localCollection) {
+    const filteredCollection: BoundaryCollection = {
+      type: "FeatureCollection",
+      features: localCollection.features.filter(
+        (feature) => feature.properties?.countryCode === countryCode,
+      ),
+    };
+    const localRegions = mapBoundaryFeatures(countryCode, "ADM1", filteredCollection);
+    if (localRegions.length > 0) {
+      return localRegions;
+    }
+  }
+
   return [];
 }
 
 export async function getCountryAdminRegions(countryCode: string): Promise<AdminBoundaryRegion[]> {
   const normalizedCode = countryCode.toUpperCase();
-  const existing = boundaryCache.get(normalizedCode);
+  const cacheKey = `${normalizedCode}:${getAdminLevelForCountry(normalizedCode)}`;
+  const existing = boundaryCache.get(cacheKey);
   if (existing) {
     return existing;
   }
 
   const request = loadCountryAdminRegions(normalizedCode).catch(() => []);
-  boundaryCache.set(normalizedCode, request);
+  boundaryCache.set(cacheKey, request);
   return request;
 }
 
@@ -392,28 +440,6 @@ export async function getAllCountryAdminRegions(
   countryCodes: string[],
 ): Promise<Record<string, AdminBoundaryRegion[]>> {
   const normalizedCodes = [...new Set(countryCodes.map((countryCode) => countryCode.toUpperCase()))];
-  const localCollection = await getLocalEuropeAdm1Collection();
-
-  if (localCollection) {
-    const allRegionsByCountry: Record<string, AdminBoundaryRegion[]> = {};
-
-    normalizedCodes.forEach((countryCode) => {
-      const filteredCollection: BoundaryCollection = {
-        type: "FeatureCollection",
-        features: localCollection.features.filter(
-          (feature) => feature.properties?.countryCode === countryCode,
-        ),
-      };
-
-      const regions = mapBoundaryFeatures(countryCode, filteredCollection);
-      if (regions.length > 0) {
-        allRegionsByCountry[countryCode] = regions;
-      }
-    });
-
-    return allRegionsByCountry;
-  }
-
   const entries = await Promise.all(
     normalizedCodes.map(async (countryCode) => {
       const regions = await getCountryAdminRegions(countryCode);

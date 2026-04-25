@@ -40,25 +40,6 @@ interface OfficialCountryCollection {
   features: OfficialCountryFeature[];
 }
 
-interface OfficialAdm1Feature {
-  type: "Feature";
-  properties: {
-    countryCode: string;
-    shapeName?: string;
-    shapeISO?: string;
-    shapeID?: string;
-  };
-  geometry: {
-    type: "Polygon" | "MultiPolygon";
-    coordinates: unknown;
-  };
-}
-
-interface OfficialAdm1Collection {
-  type: "FeatureCollection";
-  features: OfficialAdm1Feature[];
-}
-
 interface SearchItem {
   id: string;
   kind: "country" | "region";
@@ -69,7 +50,7 @@ interface SearchItem {
 
 const BASE_MAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
-const EUROPE_GLOBE_VIEW = {
+const EUROPE_MAP_VIEW = {
   longitude: 15.5,
   latitude: 53.4,
   zoom: 3.15,
@@ -165,27 +146,6 @@ function getRegionDimLayer(selectedZoneId: string | null, selectedRegionId: stri
   return null;
 }
 
-const regionOutlineLayer: LayerProps = {
-  id: "risk-region-outline",
-  type: "line",
-  paint: {
-    "line-color": "rgba(226, 232, 240, 0.8)",
-    "line-width": 1.35,
-  },
-};
-
-function getSelectedRegionOutlineLayer(selectedRegionId: string): LayerProps {
-  return {
-    id: "risk-region-outline-selected",
-    type: "line",
-    filter: ["==", ["get", "id"], selectedRegionId] as unknown as never,
-    paint: {
-      "line-color": "rgba(253, 224, 71, 0.95)",
-      "line-width": 2.6,
-    },
-  };
-}
-
 function closePolygonRing(coordinates: [number, number][]): [number, number][] {
   if (coordinates.length < 3) {
     return coordinates;
@@ -202,14 +162,6 @@ function normalizePolygonRings(rings: [number, number][][]): [number, number][][
   return rings
     .filter((ring) => ring.length >= 3)
     .map((ring) => closePolygonRing(ring));
-}
-
-function normalizeLookupText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9]+/g, "")
-    .toLowerCase();
 }
 
 function getRegionGeometry(region: ZoneRegionWithRisk): { type: "Polygon" | "MultiPolygon"; coordinates: unknown } | null {
@@ -239,6 +191,77 @@ function getRegionGeometry(region: ZoneRegionWithRisk): { type: "Polygon" | "Mul
   return null;
 }
 
+function getGeometryPolygons(
+  geometry: { type: "Polygon" | "MultiPolygon"; coordinates: unknown } | null | undefined,
+): [number, number][][][] {
+  if (!geometry) {
+    return [];
+  }
+
+  if (geometry.type === "Polygon") {
+    const rings = normalizePolygonRings(geometry.coordinates as [number, number][][]);
+    return rings.length > 0 ? [rings] : [];
+  }
+
+  return (geometry.coordinates as [number, number][][][])
+    .map((polygon) => normalizePolygonRings(polygon))
+    .filter((polygon) => polygon.length > 0);
+}
+
+function getCountryGeometryFromRegions(
+  zone: FloodZoneWithRisk,
+  allRegions: ZoneRegionWithRisk[],
+): { type: "MultiPolygon"; coordinates: [number, number][][][] } | null {
+  const polygons = allRegions
+    .filter((region) => region.countryCode === zone.countryCode)
+    .flatMap((region) => getGeometryPolygons(region.geometry ?? getRegionGeometry(region)));
+
+  if (polygons.length === 0) {
+    return null;
+  }
+
+  return {
+    type: "MultiPolygon",
+    coordinates: polygons,
+  };
+}
+
+function collectGeometryPoints(
+  geometry: { type: "Polygon" | "MultiPolygon"; coordinates: unknown } | null | undefined,
+): [number, number][] {
+  if (!geometry) {
+    return [];
+  }
+  return getGeometryPolygons(geometry).flatMap((polygon) => polygon.flatMap((ring) => ring));
+}
+
+function getBoundsFromPoints(points: [number, number][]): [[number, number], [number, number]] | null {
+  if (points.length === 0) {
+    return null;
+  }
+
+  let minLon = points[0][0];
+  let maxLon = points[0][0];
+  let minLat = points[0][1];
+  let maxLat = points[0][1];
+
+  points.forEach(([lon, lat]) => {
+    minLon = Math.min(minLon, lon);
+    maxLon = Math.max(maxLon, lon);
+    minLat = Math.min(minLat, lat);
+    maxLat = Math.max(maxLat, lat);
+  });
+
+  if (minLon === maxLon || minLat === maxLat) {
+    return null;
+  }
+
+  return [
+    [minLon, minLat],
+    [maxLon, maxLat],
+  ];
+}
+
 export function RiskMap({
   zones,
   regions,
@@ -253,7 +276,6 @@ export function RiskMap({
   const [searchQuery, setSearchQuery] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [officialCountries, setOfficialCountries] = useState<OfficialCountryCollection | null>(null);
-  const [officialAdm1Regions, setOfficialAdm1Regions] = useState<OfficialAdm1Collection | null>(null);
 
   const selectedZone = useMemo(
     () => zones.find((zone) => zone.id === selectedZoneId) ?? null,
@@ -277,25 +299,6 @@ export function RiskMap({
       .catch(() => {
         if (!cancelled) {
           setOfficialCountries({ type: "FeatureCollection", features: [] });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/data/europe-adm1.geojson")
-      .then((response) => response.json())
-      .then((data: OfficialAdm1Collection) => {
-        if (!cancelled) {
-          setOfficialAdm1Regions(data);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setOfficialAdm1Regions({ type: "FeatureCollection", features: [] });
         }
       });
     return () => {
@@ -330,26 +333,39 @@ export function RiskMap({
       .filter((value): value is NonNullable<typeof value> => value !== null);
 
     const fallbackUnmatched = zones
-      .filter(
-        (zone) =>
-          !matchedCountryCodes.has(zone.countryCode) &&
-          Array.isArray(zone.polygon) &&
-          zone.polygon.length >= 3,
-      )
-      .map((zone) => ({
-        type: "Feature",
-        properties: {
-          id: zone.id,
-          countryCode: zone.countryCode,
-          name: zone.name,
-          riskLevel: zone.riskLevel,
-          source: "fallback-unmatched",
-        },
-        geometry: {
-          type: "Polygon",
-          coordinates: [closePolygonRing(zone.polygon as [number, number][])],
-        },
-      }));
+      .filter((zone) => !matchedCountryCodes.has(zone.countryCode))
+      .map((zone) => {
+        const regionGeometry = getCountryGeometryFromRegions(zone, regions);
+        const polygonGeometry =
+          Array.isArray(zone.polygon) && zone.polygon.length >= 3
+            ? {
+                type: "Polygon" as const,
+                coordinates: [closePolygonRing(zone.polygon as [number, number][])],
+              }
+            : null;
+        const geometry = regionGeometry ?? polygonGeometry;
+
+        if (zone.countryCode === "UK" && !regionGeometry) {
+          return null;
+        }
+
+        if (!geometry) {
+          return null;
+        }
+
+        return {
+          type: "Feature",
+          properties: {
+            id: zone.id,
+            countryCode: zone.countryCode,
+            name: zone.name,
+            riskLevel: zone.riskLevel,
+            source: regionGeometry ? "regions-derived" : "fallback-unmatched",
+          },
+          geometry,
+        };
+      })
+      .filter((value): value is NonNullable<typeof value> => value !== null);
 
     if (merged.length > 0 || fallbackUnmatched.length > 0) {
       return {
@@ -379,53 +395,9 @@ export function RiskMap({
       type: "FeatureCollection",
       features: fallbackFeatures,
     };
-  }, [zones, officialCountries]);
+  }, [zones, regions, officialCountries]);
 
   const regionFeatureList = useMemo(() => {
-    const regionsByCountryAndName = new globalThis.Map(
-      regions.map((region) => [
-        `${region.countryCode}:${normalizeLookupText(region.name)}`,
-        region,
-      ]),
-    );
-
-    const zonesByCountryCode = new globalThis.Map(
-      zones.map((zone) => [zone.countryCode, zone]),
-    );
-
-    const officialFeatures = officialAdm1Regions?.features ?? [];
-    if (officialFeatures.length > 0) {
-      return officialFeatures
-        .map((feature) => {
-          const countryCode = feature.properties.countryCode;
-          const zone = zonesByCountryCode.get(countryCode);
-          if (!zone) {
-            return null;
-          }
-
-          const regionName = feature.properties.shapeName?.trim() || "Region";
-          const matchedRegion = regionsByCountryAndName.get(
-            `${countryCode}:${normalizeLookupText(regionName)}`,
-          );
-          const featureId =
-            matchedRegion?.id ??
-            `${zone.id}-adm1-${normalizeLookupText(feature.properties.shapeID ?? regionName)}`;
-
-          return {
-            type: "Feature",
-            properties: {
-              id: featureId,
-              zoneId: zone.id,
-              countryCode,
-              name: regionName,
-              riskLevel: matchedRegion?.riskLevel ?? zone.riskLevel,
-            },
-            geometry: feature.geometry,
-          };
-        })
-        .filter((feature): feature is NonNullable<typeof feature> => feature !== null);
-    }
-
     return regions
       .map((region) => {
         const geometry = getRegionGeometry(region);
@@ -445,7 +417,7 @@ export function RiskMap({
         };
       })
       .filter((feature): feature is NonNullable<typeof feature> => feature !== null);
-  }, [officialAdm1Regions, regions, zones]);
+  }, [regions]);
 
   const regionsGeoJson = useMemo(
     () => ({
@@ -454,6 +426,28 @@ export function RiskMap({
     }),
     [regionFeatureList],
   );
+
+  const selectedRegionBounds = useMemo(() => {
+    if (!selectedRegion) {
+      return null;
+    }
+    return getBoundsFromPoints(
+      collectGeometryPoints(selectedRegion.geometry ?? getRegionGeometry(selectedRegion)),
+    );
+  }, [selectedRegion]);
+
+  const selectedZoneBounds = useMemo(() => {
+    if (!selectedZone) {
+      return null;
+    }
+    const selectedFeature = zonesGeoJson.features.find(
+      (feature) => feature.properties.id === selectedZone.id,
+    );
+    const selectedGeometry = selectedFeature?.geometry as
+      | { type: "Polygon" | "MultiPolygon"; coordinates: unknown }
+      | undefined;
+    return getBoundsFromPoints(collectGeometryPoints(selectedGeometry));
+  }, [selectedZone, zonesGeoJson]);
 
   const searchItems = useMemo<SearchItem[]>(() => {
     const countryItems: SearchItem[] = zones.map((zone) => ({
@@ -507,41 +501,64 @@ export function RiskMap({
     }
 
     if (selectedRegion) {
-      mapRef.current.flyTo({
-        center: selectedRegion.center,
-        zoom: 7.8,
-        pitch: 42,
-        bearing: 12,
-        duration: 1100,
-        essential: true,
-      });
+      if (selectedRegionBounds) {
+        mapRef.current.fitBounds(selectedRegionBounds, {
+          padding: { top: 86, bottom: 86, left: 86, right: 86 },
+          duration: 1100,
+          essential: true,
+        });
+      } else {
+        mapRef.current.flyTo({
+          center: selectedRegion.center,
+          zoom: 7.8,
+          pitch: 0,
+          bearing: 0,
+          duration: 1100,
+          essential: true,
+        });
+      }
       const handle = window.setTimeout(updateFocusAnchor, 220);
       return () => window.clearTimeout(handle);
     }
 
     if (selectedZone) {
-      mapRef.current.flyTo({
-        center: selectedZone.center,
-        zoom: 5.4,
-        pitch: 44,
-        bearing: 10,
-        duration: 1300,
-        essential: true,
-      });
+      if (selectedZoneBounds) {
+        mapRef.current.fitBounds(selectedZoneBounds, {
+          padding: { top: 72, bottom: 72, left: 72, right: 72 },
+          duration: 1300,
+          essential: true,
+        });
+      } else {
+        mapRef.current.flyTo({
+          center: selectedZone.center,
+          zoom: 5.4,
+          pitch: 0,
+          bearing: 0,
+          duration: 1300,
+          essential: true,
+        });
+      }
       const handle = window.setTimeout(updateFocusAnchor, 220);
       return () => window.clearTimeout(handle);
     }
 
     onFocusAnchorChange?.(null);
     mapRef.current.flyTo({
-      center: [EUROPE_GLOBE_VIEW.longitude, EUROPE_GLOBE_VIEW.latitude],
-      zoom: EUROPE_GLOBE_VIEW.zoom,
-      pitch: EUROPE_GLOBE_VIEW.pitch,
-      bearing: EUROPE_GLOBE_VIEW.bearing,
+      center: [EUROPE_MAP_VIEW.longitude, EUROPE_MAP_VIEW.latitude],
+      zoom: EUROPE_MAP_VIEW.zoom,
+      pitch: EUROPE_MAP_VIEW.pitch,
+      bearing: EUROPE_MAP_VIEW.bearing,
       duration: 1100,
       essential: true,
     });
-  }, [selectedZone, selectedRegion, onFocusAnchorChange, updateFocusAnchor]);
+  }, [
+    selectedZone,
+    selectedRegion,
+    selectedRegionBounds,
+    selectedZoneBounds,
+    onFocusAnchorChange,
+    updateFocusAnchor,
+  ]);
 
   useEffect(() => {
     if (selectedRegion) {
@@ -638,7 +655,7 @@ export function RiskMap({
         mapLib={maplibregl}
         mapStyle={BASE_MAP_STYLE}
         projection="mercator"
-        initialViewState={EUROPE_GLOBE_VIEW}
+        initialViewState={EUROPE_MAP_VIEW}
         interactiveLayerIds={interactiveLayerIds}
         onClick={handleMapClick}
         onMove={() => {
@@ -664,8 +681,6 @@ export function RiskMap({
         <Source id="risk-regions" type="geojson" data={regionsGeoJson as never}>
           <Layer {...getRegionFillLayer(selectedZoneId, selectedRegionId)} />
           {regionDimLayer ? <Layer {...regionDimLayer} /> : null}
-          <Layer {...regionOutlineLayer} />
-          {selectedRegionId ? <Layer {...getSelectedRegionOutlineLayer(selectedRegionId)} /> : null}
         </Source>
 
         {incidents.map((incident) => (
@@ -698,7 +713,7 @@ export function RiskMap({
           onSubmit={submitSearch}
           className="relative rounded-xl border border-slate-600/70 bg-slate-900/85 shadow-lg backdrop-blur-sm"
         >
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="pointer-events-none absolute bottom-0 left-3 top-0 my-auto h-4 w-4 text-slate-400" />
           <input
             value={searchQuery}
             onChange={(event) => {
@@ -718,7 +733,7 @@ export function RiskMap({
                 setSearchQuery("");
                 setShowSuggestions(false);
               }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-300 transition hover:bg-slate-700 hover:text-slate-100"
+              className="absolute bottom-0 right-2 top-0 my-auto flex h-8 w-8 items-center justify-center rounded-md text-slate-300 transition hover:bg-slate-700 hover:text-slate-100"
               aria-label="Clear selection"
             >
               <X className="h-4 w-4" />

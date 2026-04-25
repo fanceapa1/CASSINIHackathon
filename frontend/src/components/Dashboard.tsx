@@ -2,30 +2,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
-  Camera,
   ChevronDown,
   Crown,
   Globe2,
   History,
   Landmark,
-  LocateFixed,
-  Lock,
+  LogOut,
   MapPinned,
   PanelRightClose,
   PanelRightOpen,
-  Send,
   ShieldAlert,
   Sparkles,
   TrendingUp,
   Users,
   Waves,
-  X,
 } from "lucide-react";
-import { getAllCountryAdminRegions } from "../data/adminBoundaries";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
+import { getCountryAdminRegions } from "../data/adminBoundaries";
 import { floodZones, historicalSimulations, informRiskDataSource } from "../data/floodMockData";
 import { DraggableWindow } from "./DraggableWindow";
 import { RiskMap } from "./RiskMap";
-import type { ChangeEvent } from "react";
 import type {
   FloodZone,
   FloodZoneWithRisk,
@@ -33,7 +30,6 @@ import type {
   LngLat,
   MapAnchorPoint,
   RectBounds,
-  ReportedIncident,
   ZoneRegion,
   ZoneRegionWithRisk,
 } from "../types/flood";
@@ -41,8 +37,41 @@ import type {
 type WindowKey = "past" | "create";
 type SimulationRunState = "idle" | "running" | "complete";
 
-const isPremium = false;
 const SIDEBAR_WIDTH = 356;
+const DEFAULT_AGGREGATED_REGION_COUNT = 5;
+const aggregatedRegionCountByCountryCode: Partial<Record<string, number>> = {
+  DE: 6,
+  ES: 6,
+  FR: 6,
+  IT: 6,
+  PL: 6,
+  UK: 5,
+};
+
+interface AggregateRegionSeed {
+  label: string;
+  anchor: [number, number];
+}
+
+const priorityRegionTermsByCountryCode: Partial<Record<string, string[]>> = {
+  DE: [
+    "dortmund",
+    "munster",
+    "muenster",
+    "münster",
+    "arnsberg",
+    "dusseldorf",
+    "düsseldorf",
+    "koln",
+    "köln",
+    "cologne",
+    "aachen",
+    "bonn",
+    "ahrweiler",
+  ],
+  RO: ["bucuresti", "ialomita", "bacau", "buzau", "galati", "vrancea", "cluj", "timis"],
+  UK: ["england", "scotland", "wales", "northern ireland"],
+};
 
 const loadingMessages = [
   "Extracting satellite data...",
@@ -69,6 +98,26 @@ function formatCurrencyMillions(value: number): string {
   }).format(value)}M`;
 }
 
+function formatAccountRole(role: string | undefined): string {
+  if (role === "admin") {
+    return "Global admin";
+  }
+  if (role === "paid_client") {
+    return "Paid client";
+  }
+  return "Regional user";
+}
+
+function formatAccountPlan(plan: string | undefined): string {
+  if (plan === "enterprise") {
+    return "Enterprise";
+  }
+  if (plan === "paid") {
+    return "Paid";
+  }
+  return "Free";
+}
+
 function formatIncidentDate(value: string): string {
   return new Date(value).toLocaleDateString("en-GB", {
     day: "2-digit",
@@ -87,21 +136,6 @@ function getRiskChipClasses(riskLevel: number): string {
   return "bg-rose-500/30 text-rose-100";
 }
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-      reject(new Error("Unable to parse image"));
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("File read failed"));
-    reader.readAsDataURL(file);
-  });
-}
-
 function getStringHash(value: string): number {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -111,35 +145,59 @@ function getStringHash(value: string): number {
   return Math.abs(hash);
 }
 
-function getRepresentativePolygon(region: ZoneRegion): LngLat[] {
+function getRegionPolygons(region: ZoneRegion): LngLat[][][] {
   if (region.geometry?.type === "Polygon") {
-    return region.geometry.coordinates[0] ?? region.polygon;
+    return [region.geometry.coordinates];
   }
   if (region.geometry?.type === "MultiPolygon") {
-    return region.geometry.coordinates[0]?.[0] ?? region.polygon;
+    return region.geometry.coordinates;
   }
-  return region.polygon;
+  return region.polygon.length >= 3 ? [[region.polygon]] : [];
+}
+
+function getRepresentativePolygon(region: ZoneRegion): LngLat[] {
+  const polygons = getRegionPolygons(region);
+  const largestPolygon = polygons.reduce<LngLat[] | null>((largest, polygon) => {
+    const exteriorRing = polygon[0] ?? [];
+    if (!largest || ringAreaProxy(exteriorRing) > ringAreaProxy(largest)) {
+      return exteriorRing;
+    }
+    return largest;
+  }, null);
+  return largestPolygon ?? region.polygon;
+}
+
+function ringAreaProxy(ring: LngLat[]): number {
+  if (ring.length < 3) {
+    return 0;
+  }
+
+  let area = 0;
+  for (let index = 0; index < ring.length; index += 1) {
+    const current = ring[index];
+    const next = ring[(index + 1) % ring.length];
+    const latitudeScale = Math.cos((((current[1] + next[1]) / 2) * Math.PI) / 180);
+    area += (current[0] * latitudeScale * next[1]) - (next[0] * latitudeScale * current[1]);
+  }
+  return Math.abs(area / 2);
+}
+
+function polygonAreaProxy(polygon: LngLat[][]): number {
+  const [outerRing, ...innerRings] = polygon;
+  if (!outerRing) {
+    return 0;
+  }
+  const outerArea = ringAreaProxy(outerRing);
+  const innerArea = innerRings.reduce((sum, ring) => sum + ringAreaProxy(ring), 0);
+  return Math.max(outerArea - innerArea, 0);
 }
 
 function geometryAreaProxy(region: ZoneRegion): number {
-  const polygon = getRepresentativePolygon(region);
-  if (polygon.length < 3) {
-    return 1;
-  }
-
-  let minLon = polygon[0][0];
-  let maxLon = polygon[0][0];
-  let minLat = polygon[0][1];
-  let maxLat = polygon[0][1];
-
-  polygon.forEach(([lon, lat]) => {
-    minLon = Math.min(minLon, lon);
-    maxLon = Math.max(maxLon, lon);
-    minLat = Math.min(minLat, lat);
-    maxLat = Math.max(maxLat, lat);
-  });
-
-  return Math.max((maxLon - minLon) * (maxLat - minLat), 0.0004);
+  const area = getRegionPolygons(region).reduce(
+    (sum, polygon) => sum + polygonAreaProxy(polygon),
+    0,
+  );
+  return Math.max(area, 0.0004);
 }
 
 function slugify(value: string): string {
@@ -149,6 +207,222 @@ function slugify(value: string): string {
     .replace(/[^a-zA-Z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .toLowerCase();
+}
+
+function normalizeRegionText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ß/g, "ss")
+    .replace(/æ/g, "ae")
+    .replace(/ø/g, "o")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function getMappedRegionLimit(countryCode: string): number {
+  return aggregatedRegionCountByCountryCode[countryCode] ?? DEFAULT_AGGREGATED_REGION_COUNT;
+}
+
+function getRegionPriorityTerms(zone: FloodZone): string[] {
+  const terms = [
+    ...(priorityRegionTermsByCountryCode[zone.countryCode] ?? []),
+    ...zone.regions.map((region) => region.name),
+    ...zone.majorIncidents.map((incident) => incident.affectedRegion),
+  ];
+
+  return [...new Set(terms.map(normalizeRegionText).filter(Boolean))];
+}
+
+function getRegionRelevanceScore(region: ZoneRegion, priorityTerms: string[]): number {
+  const regionName = normalizeRegionText(region.name);
+  return priorityTerms.reduce((score, term) => {
+    if (regionName === term) {
+      return score + 120;
+    }
+    if (regionName.includes(term) || term.includes(regionName)) {
+      return score + 70;
+    }
+    return score;
+  }, 0);
+}
+
+function getAggregateRegionSeeds(count: number): AggregateRegionSeed[] {
+  if (count <= 3) {
+    return [
+      { label: "Northern", anchor: [0.5, 0.9] },
+      { label: "Central", anchor: [0.5, 0.5] },
+      { label: "Southern", anchor: [0.5, 0.1] },
+    ];
+  }
+
+  if (count === 4) {
+    return [
+      { label: "Northern", anchor: [0.5, 0.9] },
+      { label: "Western", anchor: [0.15, 0.5] },
+      { label: "Eastern", anchor: [0.85, 0.5] },
+      { label: "Southern", anchor: [0.5, 0.1] },
+    ];
+  }
+
+  if (count === 5) {
+    return [
+      { label: "Northern", anchor: [0.5, 0.9] },
+      { label: "Western", anchor: [0.15, 0.5] },
+      { label: "Central", anchor: [0.5, 0.5] },
+      { label: "Eastern", anchor: [0.85, 0.5] },
+      { label: "Southern", anchor: [0.5, 0.1] },
+    ];
+  }
+
+  const sixRegionSeeds: AggregateRegionSeed[] = [
+    { label: "North-Western", anchor: [0.2, 0.82] },
+    { label: "North-Eastern", anchor: [0.8, 0.82] },
+    { label: "Western", anchor: [0.15, 0.48] },
+    { label: "Central", anchor: [0.5, 0.5] },
+    { label: "Eastern", anchor: [0.85, 0.48] },
+    { label: "Southern", anchor: [0.5, 0.14] },
+  ];
+  return sixRegionSeeds.slice(0, count);
+}
+
+function getRegionsBounds(regions: ZoneRegion[]): { minLon: number; maxLon: number; minLat: number; maxLat: number } {
+  const points = regions.flatMap((region) => getRegionPolygons(region).flatMap((polygon) => polygon[0] ?? []));
+  if (points.length === 0) {
+    return { minLon: -1, maxLon: 1, minLat: -1, maxLat: 1 };
+  }
+
+  return points.reduce(
+    (bounds, [lon, lat]) => ({
+      minLon: Math.min(bounds.minLon, lon),
+      maxLon: Math.max(bounds.maxLon, lon),
+      minLat: Math.min(bounds.minLat, lat),
+      maxLat: Math.max(bounds.maxLat, lat),
+    }),
+    {
+      minLon: points[0][0],
+      maxLon: points[0][0],
+      minLat: points[0][1],
+      maxLat: points[0][1],
+    },
+  );
+}
+
+function normalizeRegionCenter(
+  region: ZoneRegion,
+  bounds: { minLon: number; maxLon: number; minLat: number; maxLat: number },
+): [number, number] {
+  const lonSpan = Math.max(bounds.maxLon - bounds.minLon, 0.0001);
+  const latSpan = Math.max(bounds.maxLat - bounds.minLat, 0.0001);
+  return [
+    clamp((region.center[0] - bounds.minLon) / lonSpan, 0, 1),
+    clamp((region.center[1] - bounds.minLat) / latSpan, 0, 1),
+  ];
+}
+
+function squaredDistance(left: [number, number], right: [number, number]): number {
+  const dx = left[0] - right[0];
+  const dy = left[1] - right[1];
+  return dx * dx + dy * dy;
+}
+
+function getAggregatedGeometry(regions: ZoneRegion[]): ZoneRegion["geometry"] | undefined {
+  const polygons = regions.flatMap((region) => getRegionPolygons(region));
+  if (polygons.length === 0) {
+    return undefined;
+  }
+
+  if (polygons.length === 1) {
+    return {
+      type: "Polygon",
+      coordinates: polygons[0],
+    };
+  }
+
+  return {
+    type: "MultiPolygon",
+    coordinates: polygons,
+  };
+}
+
+function getAggregatedCenter(regions: ZoneRegion[]): LngLat {
+  const weightedRegions = regions.map((region) => ({
+    region,
+    weight: geometryAreaProxy(region),
+  }));
+  const totalWeight = weightedRegions.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight <= 0) {
+    const firstRegion = regions[0];
+    return firstRegion?.center ?? [0, 0];
+  }
+
+  const [weightedLon, weightedLat] = weightedRegions.reduce(
+    (totals, item) => [
+      totals[0] + item.region.center[0] * item.weight,
+      totals[1] + item.region.center[1] * item.weight,
+    ],
+    [0, 0] as LngLat,
+  );
+
+  return [
+    Number((weightedLon / totalWeight).toFixed(6)),
+    Number((weightedLat / totalWeight).toFixed(6)),
+  ];
+}
+
+function aggregateMappedRegions(zone: FloodZone, candidateRegions: ZoneRegion[]): ZoneRegion[] {
+  const aggregateCount = Math.min(getMappedRegionLimit(zone.countryCode), candidateRegions.length);
+  if (candidateRegions.length <= aggregateCount) {
+    return candidateRegions;
+  }
+
+  const bounds = getRegionsBounds(candidateRegions);
+  const seeds = getAggregateRegionSeeds(aggregateCount);
+  const priorityTerms = getRegionPriorityTerms(zone);
+  const groups = seeds.map((seed) => ({
+    seed,
+    members: [] as ZoneRegion[],
+  }));
+
+  candidateRegions.forEach((region) => {
+    const normalizedCenter = normalizeRegionCenter(region, bounds);
+    const relevance = getRegionRelevanceScore(region, priorityTerms);
+    const groupIndex = groups.reduce(
+      (bestIndex, group, index) => {
+        const relevanceNudge = relevance > 0 && group.seed.label === "Central" ? 0.08 : 0;
+        const distance = squaredDistance(normalizedCenter, group.seed.anchor) - relevanceNudge;
+        const bestGroup = groups[bestIndex];
+        const bestDistance =
+          squaredDistance(normalizedCenter, bestGroup.seed.anchor) -
+          (relevance > 0 && bestGroup.seed.label === "Central" ? 0.08 : 0);
+        return distance < bestDistance ? index : bestIndex;
+      },
+      0,
+    );
+    groups[groupIndex].members.push(region);
+  });
+
+  return groups
+    .filter((group) => group.members.length > 0)
+    .map((group, index) => {
+      const geometry = getAggregatedGeometry(group.members);
+      const name = `${group.seed.label} ${zone.name}`;
+      const fallbackPolygon = getRepresentativePolygon(group.members[0]);
+
+      return {
+        id: `${zone.countryCode.toLowerCase()}-aggregate-${slugify(group.seed.label)}-${index + 1}`,
+        name,
+        countryCode: zone.countryCode,
+        center: getAggregatedCenter(group.members),
+        polygon: geometry ? getRepresentativePolygon({ ...group.members[0], geometry }) : fallbackPolygon,
+        geometry,
+        population: 0,
+        baselineRiskLevel: zone.baselineRiskLevel,
+        estimatedLossEurMillions: 0,
+        historicalEvents: [],
+      };
+    });
 }
 
 function buildRegionalHistory(regionName: string, regionId: string, baselineRisk: number, estimatedLoss: number) {
@@ -183,17 +457,26 @@ function buildRegionsFromOfficialBoundaries(zone: FloodZone, candidateRegions: Z
   const areaWeights = candidateRegions.map((region) => geometryAreaProxy(region));
   const totalAreaWeight = areaWeights.reduce((sum, value) => sum + value, 0);
   const safeTotalWeight = totalAreaWeight <= 0 ? 1 : totalAreaWeight;
+  const roundedPopulations = areaWeights.map((weight) =>
+    Math.round(zone.stats.populationAtRisk * (weight / safeTotalWeight)),
+  );
+  const populationCorrection =
+    zone.stats.populationAtRisk - roundedPopulations.reduce((sum, value) => sum + value, 0);
 
   return candidateRegions.map((region, index) => {
     const weight = areaWeights[index] / safeTotalWeight;
     const hash = getStringHash(`${zone.countryCode}-${region.name}`);
     const riskShift = (hash % 15) - 7;
     const baselineRiskLevel = clamp(Math.round(zone.baselineRiskLevel + riskShift), 8, 100);
-    const population = Math.max(1200, Math.round(zone.stats.populationAtRisk * weight));
+    const population = Math.max(
+      0,
+      roundedPopulations[index] + (index === candidateRegions.length - 1 ? populationCorrection : 0),
+    );
     const estimatedLossEurMillions = roundToOneDecimal(
       zone.stats.estimatedHistoricalLossEurMillions * weight * (0.78 + baselineRiskLevel / 190),
     );
-    const regionId = `${zone.countryCode.toLowerCase()}-adm1-${slugify(region.name)}-${index + 1}`;
+    const regionId =
+      region.id || `${zone.countryCode.toLowerCase()}-admin-${slugify(region.name)}-${index + 1}`;
 
     return {
       id: regionId,
@@ -230,6 +513,8 @@ function deriveHistoricalRegionRisk(
 export default function Dashboard() {
   const mapAreaRef = useRef<HTMLDivElement | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
+  const navigate = useNavigate();
+  const { user, logout, canCreateSimulation } = useAuth();
 
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
@@ -249,11 +534,6 @@ export default function Dashboard() {
   const [simulationState, setSimulationState] = useState<SimulationRunState>("idle");
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
 
-  const [incidentDescription, setIncidentDescription] = useState("");
-  const [incidentImages, setIncidentImages] = useState<string[]>([]);
-  const [incidentLocation, setIncidentLocation] = useState<LngLat | null>(null);
-  const [locatingUser, setLocatingUser] = useState(false);
-  const [reportedIncidents, setReportedIncidents] = useState<ReportedIncident[]>([]);
   const [officialRegionsByCountry, setOfficialRegionsByCountry] = useState<
     Record<string, ZoneRegion[]>
   >({});
@@ -390,11 +670,7 @@ export default function Dashboard() {
       activeScenarioId === "generated" ? generatedSimulation?.riskByRegion : undefined;
 
     return zonesWithRisk.flatMap((zone) =>
-      (officialRegionsByCountry[zone.countryCode] &&
-        officialRegionsByCountry[zone.countryCode].length > 0
-        ? officialRegionsByCountry[zone.countryCode]
-        : zone.regions
-      ).map((region) => {
+      (officialRegionsByCountry[zone.countryCode] ?? []).map((region) => {
         const historicalRisk = selectedHistorical?.riskByRegion[region.id];
         const zoneHistoricalRisk = selectedHistorical?.riskByZone[zone.id];
         const derivedHistoricalRisk = deriveHistoricalRegionRisk(zoneHistoricalRisk, region);
@@ -445,13 +721,6 @@ export default function Dashboard() {
     : false;
 
   useEffect(() => {
-    if (Object.keys(officialRegionsByCountry).length > 0) {
-      return;
-    }
-    if (Object.values(loadingOfficialRegionsByCountry).some(Boolean)) {
-      return;
-    }
-
     const countryCodes = floodZones.map((zone) => zone.countryCode);
     let cancelled = false;
 
@@ -459,18 +728,16 @@ export default function Dashboard() {
       Object.fromEntries(countryCodes.map((countryCode) => [countryCode, true])),
     );
 
-    getAllCountryAdminRegions(countryCodes)
-      .then((regionsByCountry) => {
+    countryCodes.forEach((countryCode) => {
+      getCountryAdminRegions(countryCode)
+        .then((regions) => {
         if (cancelled) {
           return;
         }
 
-        const normalizedRegionsByCountry = Object.entries(regionsByCountry).reduce<
-          Record<string, ZoneRegion[]>
-        >((accumulator, [countryCode, regions]) => {
           const zone = zoneSeedsByCountryCode.get(countryCode);
-          if (!zone || regions.length === 0) {
-            return accumulator;
+          if (!zone) {
+            return;
           }
 
           const mappedRegions: ZoneRegion[] = regions.map((region) => ({
@@ -489,33 +756,37 @@ export default function Dashboard() {
             historicalEvents: [],
           }));
 
-          const normalizedRegions = buildRegionsFromOfficialBoundaries(zone, mappedRegions);
-          if (normalizedRegions.length > 0) {
-            accumulator[countryCode] = normalizedRegions;
+          const aggregatedMappedRegions = aggregateMappedRegions(zone, mappedRegions);
+          const normalizedRegions = buildRegionsFromOfficialBoundaries(zone, aggregatedMappedRegions);
+          setOfficialRegionsByCountry((current) => ({
+            ...current,
+            [countryCode]: normalizedRegions,
+          }));
+        })
+        .catch(() => {
+          if (cancelled) {
+            return;
           }
-          return accumulator;
-        }, {});
-
-        setOfficialRegionsByCountry(normalizedRegionsByCountry);
-      })
-      .catch(() => {
+          setOfficialRegionsByCountry((current) => ({
+            ...current,
+            [countryCode]: [],
+          }));
+        })
+        .finally(() => {
         if (cancelled) {
           return;
         }
-      })
-      .finally(() => {
-        if (cancelled) {
-          return;
-        }
-        setLoadingOfficialRegionsByCountry(
-          Object.fromEntries(countryCodes.map((countryCode) => [countryCode, false])),
-        );
-      });
+          setLoadingOfficialRegionsByCountry((current) => ({
+            ...current,
+            [countryCode]: false,
+          }));
+        });
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [officialRegionsByCountry, loadingOfficialRegionsByCountry, zoneSeedsByCountryCode]);
+  }, [zoneSeedsByCountryCode]);
 
   useEffect(() => {
     if (!selectedRegionId) {
@@ -630,6 +901,20 @@ export default function Dashboard() {
       label: "Country baseline estimate",
     };
   }, [selectedRegion, selectedZone, activeScenarioId, generatedSimulation, selectedHistoricalScenario]);
+
+  const simulationSuccessStats = useMemo(() => {
+    const peopleAtRisk = selectedRegion?.population ?? selectedZone?.stats.populationAtRisk ?? 0;
+    const successPct = selectedEntityFinancials?.savingsPct ?? 0;
+    const peopleHelped = Math.round(peopleAtRisk * (successPct / 100));
+    const successRate =
+      peopleAtRisk > 0 ? clamp(Math.round((peopleHelped / peopleAtRisk) * 100), 0, 100) : 0;
+
+    return {
+      peopleAtRisk,
+      peopleHelped,
+      successRate,
+    };
+  }, [selectedEntityFinancials, selectedRegion, selectedZone]);
 
   const contextualHistoricalSimulations = useMemo(() => {
     if (!selectedZone) {
@@ -774,6 +1059,11 @@ export default function Dashboard() {
     }, 2400);
   }, []);
 
+  const handleLogout = useCallback(() => {
+    logout();
+    navigate("/");
+  }, [logout, navigate]);
+
   const handleZoneSelection = useCallback(
     (zoneId: string | null) => {
       setSelectedZoneId(zoneId);
@@ -856,8 +1146,8 @@ export default function Dashboard() {
       return;
     }
 
-    if (!isPremium) {
-      showToast("Upgrade required");
+    if (!canCreateSimulation) {
+      navigate("/#contact");
       return;
     }
 
@@ -866,7 +1156,7 @@ export default function Dashboard() {
     setGeneratedSimulation(null);
     setSimulationState("running");
     setLoadingStepIndex(0);
-  }, [openWindow, selectedZoneId, showToast]);
+  }, [canCreateSimulation, navigate, openWindow, selectedZoneId, showToast]);
 
   const rerunSimulation = useCallback(() => {
     if (!selectedZoneId) {
@@ -878,66 +1168,6 @@ export default function Dashboard() {
     setSimulationState("running");
     setLoadingStepIndex(0);
   }, [selectedZoneId, showToast]);
-
-  const onImageUpload = useCallback(
-    async (event: ChangeEvent<HTMLInputElement>) => {
-      const incomingFiles = Array.from(event.target.files ?? []).slice(0, 4);
-      if (incomingFiles.length === 0) {
-        return;
-      }
-      try {
-        const previews = await Promise.all(incomingFiles.map(fileToDataUrl));
-        setIncidentImages((current) => [...current, ...previews].slice(0, 4));
-      } catch {
-        showToast("Unable to upload selected images.");
-      }
-      event.currentTarget.value = "";
-    },
-    [showToast],
-  );
-
-  const requestLocation = useCallback(() => {
-    if (!navigator.geolocation) {
-      showToast("Geolocation is not available in this browser.");
-      return;
-    }
-
-    setLocatingUser(true);
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setIncidentLocation([position.coords.longitude, position.coords.latitude]);
-        setLocatingUser(false);
-        showToast("Location captured.");
-      },
-      () => {
-        setLocatingUser(false);
-        showToast("Location permission was denied.");
-      },
-      { enableHighAccuracy: true, timeout: 12_000 },
-    );
-  }, [showToast]);
-
-  const submitIncidentReport = useCallback(() => {
-    if (!incidentLocation) {
-      showToast("Add your location before submitting.");
-      return;
-    }
-
-    const incident: ReportedIncident = {
-      id: `incident-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-      description: incidentDescription.trim() || "Flooding incident reported by field user",
-      location: incidentLocation,
-      imagePreviews: incidentImages,
-      zoneId: selectedZoneId,
-    };
-
-    setReportedIncidents((current) => [incident, ...current].slice(0, 24));
-    setIncidentDescription("");
-    setIncidentImages([]);
-    setIncidentLocation(null);
-    showToast("Incident report submitted.");
-  }, [incidentLocation, incidentDescription, incidentImages, selectedZoneId, showToast]);
 
   const selectedZoneRegions = useMemo(
     () =>
@@ -951,8 +1181,9 @@ export default function Dashboard() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
-      <aside className="absolute inset-y-0 left-0 z-40 w-[356px] overflow-y-auto border-r border-slate-700/80 bg-slate-900/95 px-5 py-6 shadow-2xl backdrop-blur-sm">
-        <div className="mb-6">
+      <aside className="absolute inset-y-0 left-0 z-40 flex w-[356px] flex-col overflow-y-auto border-r border-slate-700/80 bg-slate-900/95 px-5 py-6 shadow-2xl backdrop-blur-sm">
+        <div className="flex-1">
+          <div className="mb-6">
           <p className="text-xs uppercase tracking-[0.22em] text-cyan-300/85">
             Flood Risk Dashboard
           </p>
@@ -966,9 +1197,9 @@ export default function Dashboard() {
           <p className="mt-2 text-[11px] text-slate-400">
             Baseline risk source: {informRiskDataSource.dataset}
           </p>
-        </div>
+          </div>
 
-        {selectedZone ? (
+          {selectedZone ? (
           <section className="space-y-4">
             <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-4">
               <p className="text-sm text-slate-300">Selected country</p>
@@ -1050,18 +1281,32 @@ export default function Dashboard() {
                       {formatCurrencyMillions(selectedEntityFinancials.estimatedSaved)})
                     </p>
                   </div>
+
+                  <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
+                    <div className="flex items-center gap-2 text-xs text-slate-300">
+                      <Users className="h-3.5 w-3.5 text-cyan-300" />
+                      Simulation success rate
+                    </div>
+                    <p className="mt-2 text-lg font-semibold text-emerald-200">
+                      {simulationSuccessStats.successRate}%
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      {formatNumber(simulationSuccessStats.peopleHelped)} helped /{" "}
+                      {formatNumber(simulationSuccessStats.peopleAtRisk)} at risk
+                    </p>
+                  </div>
                 </>
               ) : null}
             </div>
 
             <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
-              <p className="text-sm font-medium text-slate-100">Regional boundaries (click to select)</p>
+              <p className="text-sm font-medium text-slate-100">Aggregated regions (click to select)</p>
               <p className="mt-1 text-[11px] text-slate-400">
                 {selectedZoneRegionsLoading
-                  ? "The map is already using built-in ADM1 boundaries; the sidebar list is syncing."
+                  ? "Loading administrative boundaries for this country."
                   : selectedZoneHasOfficialRegions
-                    ? "Official administrative boundaries loaded."
-                    : "Built-in ADM1 administrative boundaries are active on the map."}
+                    ? "Official boundaries grouped into full-country regions."
+                    : "No official administrative boundaries are available for this country yet."}
               </p>
               <div className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1">
                 {selectedZoneRegions.map((region) => (
@@ -1169,94 +1414,32 @@ export default function Dashboard() {
           </div>
         )}
 
+        </div>
+
         <section className="mt-5 rounded-xl border border-slate-700/80 bg-slate-800/70 p-4">
-          <h2 className="text-sm font-semibold text-slate-100">Report incident</h2>
-          <p className="mt-1 text-xs text-slate-300">
-            Anyone can upload photos and share current location.
+          <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Account</p>
+          <p className="mt-2 text-sm font-semibold text-slate-100">
+            {user?.name ?? "Demo user"}
           </p>
-
-          <textarea
-            value={incidentDescription}
-            onChange={(event) => setIncidentDescription(event.target.value)}
-            placeholder="Describe the incident (example: sudden river level increase)."
-            className="mt-3 h-20 w-full resize-none rounded-lg border border-slate-600/80 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-400"
-          />
-
-          <label className="mt-3 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-600/80 bg-slate-900/75 px-3 py-2 text-xs text-slate-100 transition hover:bg-slate-800">
-            <Camera className="h-3.5 w-3.5" />
-            Upload photos
-            <input type="file" accept="image/*" multiple className="hidden" onChange={onImageUpload} />
-          </label>
-
-          {incidentImages.length > 0 ? (
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {incidentImages.map((preview, index) => (
-                <div
-                  key={`${preview.slice(0, 24)}-${index}`}
-                  className="relative overflow-hidden rounded-md border border-slate-600/70"
-                >
-                  <img src={preview} alt="Incident upload" className="h-16 w-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setIncidentImages((current) =>
-                        current.filter((_, imageIndex) => imageIndex !== index),
-                      )
-                    }
-                    className="absolute right-1 top-1 rounded bg-slate-950/80 p-0.5 text-slate-100"
-                    aria-label="Remove image"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-2">
+              <p className="text-slate-400">Role</p>
+              <p className="mt-1 font-medium text-slate-100">{formatAccountRole(user?.role)}</p>
             </div>
-          ) : null}
-
+            <div className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-2">
+              <p className="text-slate-400">Plan</p>
+              <p className="mt-1 font-medium text-cyan-200">{formatAccountPlan(user?.plan)}</p>
+            </div>
+          </div>
           <button
             type="button"
-            onClick={requestLocation}
-            disabled={locatingUser}
-            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-500/25 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-500/40 disabled:opacity-70"
+            onClick={handleLogout}
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-600/80 bg-slate-900/75 px-3 py-2 text-xs font-medium text-slate-200 transition hover:bg-slate-800"
           >
-            <LocateFixed className="h-3.5 w-3.5" />
-            {locatingUser ? "Detecting location..." : "Use current location"}
-          </button>
-
-          <p className="mt-2 text-[11px] text-slate-300">
-            {incidentLocation
-              ? `Location: ${incidentLocation[1].toFixed(4)}, ${incidentLocation[0].toFixed(4)}`
-              : "Location is not set."}
-          </p>
-
-          <button
-            type="button"
-            onClick={submitIncidentReport}
-            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500/30 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/45"
-          >
-            <Send className="h-3.5 w-3.5" />
-            Submit report
+            <LogOut className="h-3.5 w-3.5" />
+            Log out
           </button>
         </section>
-
-        {reportedIncidents.length > 0 ? (
-          <section className="mt-4 rounded-xl border border-slate-700/80 bg-slate-800/70 p-4">
-            <h2 className="text-sm font-semibold text-slate-100">Recent reports</h2>
-            <div className="mt-2 space-y-2">
-              {reportedIncidents.slice(0, 4).map((incident) => (
-                <div
-                  key={incident.id}
-                  className="rounded-md border border-slate-700/80 bg-slate-900/70 px-3 py-2"
-                >
-                  <p className="text-xs text-slate-100">{incident.description}</p>
-                  <p className="mt-1 text-[11px] text-slate-400">
-                    {new Date(incident.createdAt).toLocaleString("en-GB")}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
       </aside>
 
       <div
@@ -1269,7 +1452,7 @@ export default function Dashboard() {
           regions={regionsWithRisk}
           selectedZoneId={selectedZone?.id ?? null}
           selectedRegionId={selectedRegionId}
-          incidents={reportedIncidents}
+          incidents={[]}
           onSelectZone={handleZoneSelection}
           onSelectRegion={handleRegionSelection}
           onFocusAnchorChange={setFocusAnchor}
@@ -1319,9 +1502,8 @@ export default function Dashboard() {
                     <Sparkles className="h-4 w-4" />
                     Create simulation
                   </span>
-                  <span className="inline-flex items-center gap-1 text-xs text-violet-200">
-                    <Lock className="h-3 w-3" />
-                    Premium
+                  <span className="text-xs text-violet-200">
+                    {canCreateSimulation ? "Unlocked" : "Contact"}
                   </span>
                 </button>
               </div>

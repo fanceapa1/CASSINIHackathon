@@ -1,11 +1,13 @@
-export type UserRole = 'admin' | 'regional_user';
+export type UserRole = 'admin' | 'paid_client' | 'regional_user';
 export type AccessScope = 'global' | 'regional';
+export type AccountPlan = 'enterprise' | 'free' | 'paid';
 
 export type DemoUser = {
   id: string;
   name: string;
   email: string;
   role: UserRole;
+  plan: AccountPlan;
   organization: string;
   accessScope: AccessScope;
   region?: string;
@@ -26,7 +28,18 @@ const demoAccounts: DemoAccount[] = [
     email: 'admin@forecast.demo',
     password: 'admin123',
     role: 'admin',
+    plan: 'enterprise',
     organization: 'CASSINI Forecast Operations',
+    accessScope: 'global',
+  },
+  {
+    id: 'paid-client-eu',
+    name: 'EU Flood Ops Client',
+    email: 'paid@forecast.demo',
+    password: 'paid123',
+    role: 'paid_client',
+    plan: 'paid',
+    organization: 'European Flood Operations',
     accessScope: 'global',
   },
   {
@@ -35,6 +48,7 @@ const demoAccounts: DemoAccount[] = [
     email: 'bucharest@wmo.demo',
     password: 'test123',
     role: 'regional_user',
+    plan: 'free',
     organization: 'WMO',
     accessScope: 'regional',
     region: 'Bucharest, Romania',
@@ -46,11 +60,18 @@ const toPublicUser = ({ password: _password, ...user }: DemoAccount): DemoUser =
 export const demoCredentials = demoAccounts.map((account) => ({
   email: account.email,
   password: account.password,
-  label: account.accessScope === 'global' ? 'Admin account' : 'Bucharest regional account',
+  label:
+    account.role === 'admin'
+      ? 'Admin account'
+      : account.role === 'paid_client'
+        ? 'Paid client account'
+        : 'Bucharest regional account',
   description:
-    account.accessScope === 'global'
+    account.role === 'admin'
       ? 'Full worldwide data and coordination access'
-      : `${account.organization} account limited to ${account.region}`,
+      : account.role === 'paid_client'
+        ? 'Paid plan with simulation creation unlocked'
+        : `${account.organization} free account limited to ${account.region}`,
 }));
 
 export function authenticateDemoUser(email: string, password: string): LoginResult {

@@ -11,8 +11,16 @@ function App() {
   const location = useLocation();
 
   useEffect(() => {
+    if (location.hash) {
+      window.setTimeout(() => {
+        document
+          .getElementById(location.hash.slice(1))
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 0);
+      return;
+    }
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-  }, [location.pathname]);
+  }, [location.hash, location.pathname]);
 
   return (
     <div className="relative min-h-screen overflow-x-clip bg-[#04070f] text-slate-100">
