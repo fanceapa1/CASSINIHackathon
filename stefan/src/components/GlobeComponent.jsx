@@ -36,6 +36,9 @@ const FLOOD_RISK_COLORS = {
   low: { color: "#00d4ff", label: "Scăzut" },
 };
 
+// Global cache variable so we only fetch the map boundaries once per page load
+let cachedGeoJson = null;
+
 export default function GlobeComponent({ className = "" }) {
   const containerRef = useRef(null);
   const globeRef = useRef(null);
@@ -55,13 +58,16 @@ export default function GlobeComponent({ className = "" }) {
 
         if (destroyed || !containerRef.current) return;
 
-        // Fetch geojson
-        const response = await fetch(
-          "https://raw.githubusercontent.com/vasturiano/globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson"
-        );
-        if (!response.ok) throw new Error("Failed to load countries data");
+        // Fetch geojson - now using our global cache
+        if (!cachedGeoJson) {
+          const response = await fetch(
+            "https://raw.githubusercontent.com/vasturiano/globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson"
+          );
+          if (!response.ok) throw new Error("Failed to load countries data");
+          cachedGeoJson = await response.json();
+        }
 
-        const countries = await response.json();
+        const countries = cachedGeoJson;
         if (destroyed) return;
 
         // Clear previous content
@@ -103,17 +109,17 @@ export default function GlobeComponent({ className = "" }) {
             const iso = d.properties?.ISO_A2;
             const risk = FLOOD_RISK_DATA[iso] || "low";
             const riskColor = FLOOD_RISK_COLORS[risk];
-            
+
             const opacity =
               risk === "critical" ? 0.8 :
-              risk === "high" ? 0.6 :
-              risk === "medium" ? 0.4 : 0.2;
-            
+                risk === "high" ? 0.6 :
+                  risk === "medium" ? 0.4 : 0.2;
+
             const hex = riskColor.color;
             const r = parseInt(hex.slice(1, 3), 16);
             const g = parseInt(hex.slice(3, 5), 16);
             const b = parseInt(hex.slice(5, 7), 16);
-            
+
             return `rgba(${r}, ${g}, ${b}, ${opacity})`;
           })
           .polygonSideColor(() => "rgba(0, 212, 255, 0.02)")
@@ -186,13 +192,17 @@ export default function GlobeComponent({ className = "" }) {
       destroyed = true;
       cleanup?.then((fn) => fn?.());
       if (resizeObserver) resizeObserver.disconnect();
+
+      // Cleanup WebGL context memory leak
+      if (globeRef.current && globeRef.current._destructor) {
+        globeRef.current._destructor();
+      }
       globeRef.current = null;
     };
   }, []);
 
   return (
     <div className={`relative w-full h-full ${className}`}>
-      {/* Am șters evenimentele de pe părinte, se ocupă `globe.onPolygonHover` */}
       <div
         ref={containerRef}
         style={{
@@ -273,7 +283,7 @@ export default function GlobeComponent({ className = "" }) {
             fontFamily: "monospace",
             fontSize: "11px",
             color: "#cbd5e1",
-            pointerEvents: "none", // Pentru a nu bloca interacțiunea cu globul sub ea
+            pointerEvents: "none",
             animation: "fadeIn 0.3s ease-out",
           }}
         >
@@ -283,11 +293,11 @@ export default function GlobeComponent({ className = "" }) {
               to { opacity: 1; transform: translateY(0); }
             }
           `}</style>
-          
+
           <div style={{ color: "#00d4ff", fontWeight: 700, marginBottom: "10px", fontSize: "13px" }}>
             RISC INUNDAȚII
           </div>
-          
+
           {Object.entries(FLOOD_RISK_COLORS).reverse().map(([risk, data]) => (
             <div
               key={risk}

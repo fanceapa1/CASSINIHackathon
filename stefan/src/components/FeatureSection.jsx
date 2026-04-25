@@ -1,6 +1,6 @@
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-import { useScrambleText } from "../hooks/useScrambleText";
+import ScrambleTitle from "./ScrambleTitle";
 
 const FeatureSection = ({ section, reverse }) => {
   const sectionRef = useRef(null);
@@ -8,13 +8,11 @@ const FeatureSection = ({ section, reverse }) => {
     amount: 0.45,
     margin: "-12% 0px -10% 0px"
   });
-  const title = useScrambleText(section.title, isInView);
 
   return (
     <motion.section
       id={section.id}
       ref={sectionRef}
-      transition={{ layout: { duration: 0.65, ease: "easeInOut" } }}
       className="relative mx-auto grid w-full max-w-6xl scroll-mt-28 items-center gap-8 px-6 py-12 sm:gap-12 lg:grid-cols-2 lg:px-8 lg:py-20"
     >
       <div
@@ -46,9 +44,11 @@ const FeatureSection = ({ section, reverse }) => {
         transition={{ duration: 0.7, ease: "easeOut", delay: 0.08 }}
         className={`${reverse ? "lg:order-1" : "lg:order-2"} space-y-6`}
       >
-        <h2 className="font-heading text-3xl font-bold uppercase tracking-[0.04em] text-slate-100 sm:text-4xl">
-          {title}
-        </h2>
+        <ScrambleTitle
+          as="h2"
+          text={section.title}
+          className="font-heading text-3xl font-bold uppercase tracking-[0.04em] text-slate-100 sm:text-4xl"
+        />
         <motion.p
           initial={{ opacity: 0, y: 16 }}
           animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0 }}
