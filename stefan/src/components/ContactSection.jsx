@@ -1,10 +1,42 @@
 import { motion, useInView } from "framer-motion";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import ScrambleTitle from "./ScrambleTitle";
 
 const ContactSection = ({ sectionRef }) => {
   const localRef = useRef(null);
   const isInView = useInView(localRef, { amount: 0.32, margin: "-8% 0px" });
+  
+  // Adăugăm un state pentru a afișa statusul trimiterii
+  const [status, setStatus] = useState("");
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setStatus("Se trimite...");
+
+    const formData = new FormData(event.target);
+    // TODO: Înlocuiește cu cheia primită pe email de la Web3Forms
+    formData.append("access_key", "cb5ff32d-5f64-4606-af08-3bb96cb11df2");
+
+    try {
+      const response = await fetch("https://api.web3forms.com/submit", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setStatus("Mesaj trimis cu succes! Vom reveni curând.");
+        event.target.reset(); // Curățăm formularul
+      } else {
+        console.error("Eroare Web3Forms:", data);
+        setStatus("A apărut o eroare. Te rugăm să încerci din nou.");
+      }
+    } catch (error) {
+      console.error("Eroare de rețea:", error);
+      setStatus("Eroare de rețea. Verifică conexiunea.");
+    }
+  };
 
   return (
     <footer
@@ -36,7 +68,7 @@ const ContactSection = ({ sectionRef }) => {
         </motion.div>
 
         <motion.form
-          onSubmit={(event) => event.preventDefault()}
+          onSubmit={handleSubmit}
           initial={{ opacity: 0, y: 28 }}
           animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0 }}
           transition={{ duration: 0.65, delay: 0.08 }}
@@ -48,6 +80,7 @@ const ContactSection = ({ sectionRef }) => {
               <input
                 type="text"
                 name="name"
+                required
                 placeholder="Numele tau"
                 className="mt-2 w-full rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60"
               />
@@ -58,6 +91,7 @@ const ContactSection = ({ sectionRef }) => {
               <input
                 type="email"
                 name="email"
+                required
                 placeholder="nume@companie.ro"
                 className="mt-2 w-full rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60"
               />
@@ -67,6 +101,7 @@ const ContactSection = ({ sectionRef }) => {
               Mesaj
               <textarea
                 name="message"
+                required
                 rows={5}
                 placeholder="Spune-ne pe scurt ce tip de suport sau oferta cauti."
                 className="mt-2 w-full resize-none rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60"
@@ -75,10 +110,18 @@ const ContactSection = ({ sectionRef }) => {
 
             <button
               type="submit"
-              className="rounded-full bg-cyan-300 px-6 py-3 font-body text-sm font-bold uppercase tracking-[0.08em] text-slate-950 transition hover:bg-cyan-200 sm:text-base"
+              className="rounded-full bg-cyan-300 px-6 py-3 font-body text-sm font-bold uppercase tracking-[0.08em] text-slate-950 transition hover:bg-cyan-200 sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={status === "Se trimite..."}
             >
-              Trimite Mesaj
+              {status === "Se trimite..." ? "Se trimite..." : "Trimite Mesaj"}
             </button>
+
+            {/* Mesajul de status (succes sau eroare) */}
+            {status && status !== "Se trimite..." && (
+              <p className={`font-body text-sm font-semibold ${status.includes("succes") ? "text-green-400" : "text-red-400"}`}>
+                {status}
+              </p>
+            )}
           </div>
         </motion.form>
       </div>
