@@ -4,7 +4,11 @@ import ScrambleTitle from "./ScrambleTitle";
 
 const ContactSection = ({ sectionRef }) => {
   const localRef = useRef(null);
-  const isInView = useInView(localRef, { amount: 0.32, margin: "-8% 0px" });
+  const isInView = useInView(localRef, { 
+      once: true, 
+      amount: 0.2, 
+      margin: "0px" 
+  });
   const [status, setStatus] = useState("");
 
   const handleSubmit = async (event) => {
@@ -58,7 +62,7 @@ const ContactSection = ({ sectionRef }) => {
             cateva detalii si revenim rapid.
           </p>
           <div className="space-y-2 font-body text-sm text-slate-400 sm:text-base">
-            <p>hello@castopini.com</p>
+            <p>hello@synoptis.com</p>
             <p>+40 721 000 111</p>
             <p>Bucharest, Romania</p>
           </div>

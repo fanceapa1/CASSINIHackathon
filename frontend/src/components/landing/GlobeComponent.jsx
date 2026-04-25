@@ -51,15 +51,11 @@ export default function GlobeComponent({ className = "" }) {
 
     const initGlobe = async () => {
       try {
-        if (destroyed || !containerRef.current) {
-          return;
-        }
+        if (destroyed || !containerRef.current) return;
 
         const { default: Globe } = await import("globe.gl");
 
-        if (destroyed || !containerRef.current) {
-          return;
-        }
+        if (destroyed || !containerRef.current) return;
 
         if (!cachedGeoJson) {
           const response = await fetch(
@@ -73,9 +69,7 @@ export default function GlobeComponent({ className = "" }) {
           cachedGeoJson = await response.json();
         }
 
-        if (destroyed || !containerRef.current) {
-          return;
-        }
+        if (destroyed || !containerRef.current) return;
 
         containerRef.current.innerHTML = "";
         const globe = new Globe()(containerRef.current);
@@ -84,22 +78,24 @@ export default function GlobeComponent({ className = "" }) {
         const { clientWidth: width, clientHeight: height } = containerRef.current;
         globe.width(width).height(height);
 
+        // --- SETĂRI VIZUALE (Revenire la designul original + Polish) ---
         globe
           .backgroundColor("rgba(0, 0, 0, 0)")
           .atmosphereColor("#00d4ff")
-          .atmosphereAltitude(0.12)
+          .atmosphereAltitude(0.15) // O idee mai extins pentru un glow mai frumos
           .showAtmosphere(true)
-          .showGraticules(false);
+          .showGraticules(true); // Activează latitudinea/longitudinea pentru un look radar/holografic
 
-        const globeMaterial = globe.globeMaterial();
-        globeMaterial.color.set("#0f172a");
-        globeMaterial.transparent = false;
+        // Ajustăm opacitatea liniilor de graticule să fie foarte subtile
+        const material = globe.globeMaterial();
+        material.color.set("#0f172a"); // Culoarea ta originală
+        material.transparent = false;
 
         globe
           .polygonsData(cachedGeoJson.features)
           .polygonAltitude((feature) => {
             const risk = FLOOD_RISK_DATA[feature.properties?.ISO_A2];
-            if (risk === "critical") return 0.014;
+            if (risk === "critical") return 0.016; // Foarte ușor ridicate pentru volum
             if (risk === "high") return 0.012;
             if (risk === "medium") return 0.01;
             return 0.008;
@@ -107,6 +103,8 @@ export default function GlobeComponent({ className = "" }) {
           .polygonCapColor((feature) => {
             const risk = FLOOD_RISK_DATA[feature.properties?.ISO_A2] || "low";
             const riskColor = FLOOD_RISK_COLORS[risk];
+            
+            // Aceleași opacități ca în originalul tău
             const opacity =
               risk === "critical" ? 0.8 :
               risk === "high" ? 0.6 :
@@ -119,19 +117,26 @@ export default function GlobeComponent({ className = "" }) {
 
             return `rgba(${r}, ${g}, ${b}, ${opacity})`;
           })
-          .polygonSideColor(() => "rgba(0, 212, 255, 0.02)")
+          // Marginile laterale capătă o nuanță subtilă a culorii de risc, oferind un 3D excelent
+          .polygonSideColor((feature) => {
+            const risk = FLOOD_RISK_DATA[feature.properties?.ISO_A2] || "low";
+            if (risk === "critical") return "rgba(255, 23, 68, 0.15)";
+            if (risk === "high") return "rgba(255, 109, 0, 0.12)";
+            return "rgba(0, 212, 255, 0.02)"; // Pentru cele low, păstrăm originalul
+          })
           .polygonStrokeColor((feature) => {
             const risk = FLOOD_RISK_DATA[feature.properties?.ISO_A2] || "low";
-            return `${FLOOD_RISK_COLORS[risk].color}18`;
+            // Am crescut puțin opacitatea borderului de la 18 la 35 (hex) pentru granițe mai clare
+            return `${FLOOD_RISK_COLORS[risk].color}35`; 
           })
           .polygonLabel(({ properties }) => {
             const risk = FLOOD_RISK_DATA[properties?.ISO_A2] || "low";
             const riskColor = FLOOD_RISK_COLORS[risk];
 
             return `
-              <div style="background: rgba(4,7,15,0.95); border: 2px solid ${riskColor.color}; border-radius: 6px; padding: 8px 12px; font-family: monospace; font-size: 12px; color: #e2e8f0; white-space: nowrap;">
+              <div style="background: rgba(4,7,15,0.95); border: 1px solid ${riskColor.color}; border-radius: 6px; padding: 8px 12px; font-family: monospace; font-size: 12px; color: #e2e8f0; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
                 <b style="color:${riskColor.color};">${properties.NAME}</b><br/>
-                <span style="font-size: 11px; opacity: 0.8;">Risc inundatii: <b>${riskColor.label}</b></span>
+                <span style="font-size: 11px; opacity: 0.8;">Risc inundații: <b>${riskColor.label}</b></span>
               </div>
             `;
           });
@@ -140,7 +145,7 @@ export default function GlobeComponent({ className = "" }) {
           setShowLegend(Boolean(polygon));
         });
 
-        globe.pointOfView({ lat: 20, lng: 0, altitude: 1.8 }, 0);
+        globe.pointOfView({ lat: 20, lng: 0, altitude: 1.8 }, 0); // Păstrat unghiul tău original
 
         const controls = globe.controls();
         controls.autoRotate = true;
@@ -149,10 +154,7 @@ export default function GlobeComponent({ className = "" }) {
         controls.enablePan = false;
 
         const handleResize = () => {
-          if (!containerRef.current || !globeRef.current) {
-            return;
-          }
-
+          if (!containerRef.current || !globeRef.current) return;
           const { clientWidth: nextWidth, clientHeight: nextHeight } = containerRef.current;
           globeRef.current.width(nextWidth).height(nextHeight);
         };
@@ -162,6 +164,15 @@ export default function GlobeComponent({ className = "" }) {
 
         resizeObserver = new ResizeObserver(handleResize);
         resizeObserver.observe(containerRef.current);
+
+        // Corecție pentru a colora liniile graticulelor (grid-ul holografic)
+        const scene = globe.scene();
+        scene.children.forEach(obj => {
+          if (obj.type === 'LineSegments') {
+             obj.material.color.set('rgba(0, 212, 255, 0.08)');
+             obj.material.transparent = true;
+          }
+        });
 
         setReady(true);
       } catch (err) {
@@ -182,10 +193,29 @@ export default function GlobeComponent({ className = "" }) {
       if (globeRef.current?._destructor) {
         globeRef.current._destructor();
       }
-
       globeRef.current = null;
     };
   }, []);
+
+  // Oprirea randării când globul nu este vizibil (Optimizare crucială păstrată)
+  useEffect(() => {
+    if (!ready || !globeRef.current || !containerRef.current) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          globeRef.current.resumeAnimation();
+        } else {
+          globeRef.current.pauseAnimation();
+        }
+      },
+      { threshold: 0 }
+    );
+
+    observer.observe(containerRef.current);
+
+    return () => observer.disconnect();
+  }, [ready]);
 
   return (
     <div className={`relative h-full w-full ${className}`}>
@@ -196,7 +226,7 @@ export default function GlobeComponent({ className = "" }) {
           height: "100%",
           position: "relative",
           opacity: ready ? 1 : 0,
-          transition: "opacity 0.5s ease-out",
+          transition: "opacity 0.8s ease-out",
         }}
       />
 
@@ -245,7 +275,7 @@ export default function GlobeComponent({ className = "" }) {
               fontSize: "12px",
             }}
           >
-            <div style={{ color: "#ff6b6b", marginBottom: "8px", fontSize: "14px" }}>Eroare</div>
+            <div style={{ color: "#ff6b6b", marginBottom: "8px", fontSize: "14px" }}>Eroare de Încărcare</div>
             <div style={{ opacity: 0.7 }}>{error}</div>
           </div>
         </div>
@@ -278,7 +308,7 @@ export default function GlobeComponent({ className = "" }) {
           `}</style>
 
           <div style={{ color: "#00d4ff", fontWeight: 700, marginBottom: "10px", fontSize: "13px" }}>
-            RISC INUNDATII
+            RISC INUNDAȚII
           </div>
 
           {Object.entries(FLOOD_RISK_COLORS).reverse().map(([risk, data]) => (

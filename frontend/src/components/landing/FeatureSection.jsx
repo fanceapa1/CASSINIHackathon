@@ -4,9 +4,11 @@ import ScrambleTitle from "./ScrambleTitle";
 
 const FeatureSection = ({ section, reverse }) => {
   const sectionRef = useRef(null);
+  
+  // Am scos 'once: true'. Se va anima sus-jos de fiecare data.
   const isInView = useInView(sectionRef, {
-    amount: 0.45,
-    margin: "-12% 0px -10% 0px"
+    amount: 0.3,
+    margin: "-10% 0px -10% 0px"
   });
 
   return (
@@ -17,7 +19,7 @@ const FeatureSection = ({ section, reverse }) => {
     >
       <div
         aria-hidden
-        className={`pointer-events-none absolute inset-x-20 top-8 -z-10 h-40 blur-3xl ${reverse
+        className={`pointer-events-none absolute inset-x-20 top-8 -z-10 h-40 blur-3xl transform-gpu will-change-transform ${reverse
           ? "bg-[radial-gradient(circle,rgba(249,115,91,0.2)_0%,transparent_70%)]"
           : "bg-[radial-gradient(circle,rgba(74,214,255,0.2)_0%,transparent_70%)]"
           }`}
@@ -25,7 +27,7 @@ const FeatureSection = ({ section, reverse }) => {
 
       <motion.div
         initial={{ opacity: 0, x: reverse ? 50 : -50 }}
-        animate={isInView ? { opacity: 1, x: 0 } : { opacity: 0.3 }}
+        animate={isInView ? { opacity: 1, x: 0 } : { opacity: 0 }}
         transition={{ duration: 0.65, ease: "easeOut" }}
         className={`${reverse ? "lg:order-2" : "lg:order-1"
           } overflow-hidden rounded-[28px] border border-cyan-100/20 bg-[#071329]/70 p-3 shadow-[0_30px_60px_-35px_rgba(0,0,0,0.8)]`}
@@ -40,7 +42,7 @@ const FeatureSection = ({ section, reverse }) => {
 
       <motion.div
         initial={{ opacity: 0, x: reverse ? -50 : 50 }}
-        animate={isInView ? { opacity: 1, x: 0 } : { opacity: 0.3 }}
+        animate={isInView ? { opacity: 1, x: 0 } : { opacity: 0 }}
         transition={{ duration: 0.7, ease: "easeOut", delay: 0.08 }}
         className={`${reverse ? "lg:order-1" : "lg:order-2"} space-y-6`}
       >
