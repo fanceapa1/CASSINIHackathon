@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import Map, { Layer, Marker, NavigationControl, Source } from "react-map-gl/maplibre";
+import Map, { Layer, NavigationControl, Source } from "react-map-gl/maplibre";
 import { Search, X } from "lucide-react";
 import type { FormEvent } from "react";
 import type { LayerProps, MapLayerMouseEvent, MapRef } from "react-map-gl/maplibre";
 import type {
   FloodZoneWithRisk,
   MapAnchorPoint,
-  ReportedIncident,
   ZoneRegionWithRisk,
 } from "../types/flood";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -17,7 +16,6 @@ interface RiskMapProps {
   regions: ZoneRegionWithRisk[];
   selectedZoneId: string | null;
   selectedRegionId: string | null;
-  incidents: ReportedIncident[];
   onSelectZone: (zoneId: string | null) => void;
   onSelectRegion: (regionId: string | null) => void;
   onFocusAnchorChange?: (anchor: MapAnchorPoint | null) => void;
@@ -204,12 +202,39 @@ function normalizePolygonRings(rings: [number, number][][]): [number, number][][
     .map((ring) => closePolygonRing(ring));
 }
 
+function computeGeometryBbox(
+  geometry: { type: string; coordinates: unknown },
+): [number, number, number, number] | null {
+  let rings: [number, number][][] = [];
+  if (geometry.type === "Polygon") {
+    const first = (geometry.coordinates as [number, number][][])[0];
+    if (first) rings = [first];
+  } else if (geometry.type === "MultiPolygon") {
+    rings = (geometry.coordinates as [number, number][][][]).map((poly) => poly[0]).filter(Boolean);
+  }
+  if (rings.length === 0) return null;
+  let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+  for (const ring of rings) {
+    for (const [lng, lat] of ring) {
+      if (lng < minLng) minLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lng > maxLng) maxLng = lng;
+      if (lat > maxLat) maxLat = lat;
+    }
+  }
+  return [minLng, minLat, maxLng, maxLat];
+}
+
 function normalizeLookupText(value: string): string {
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-zA-Z0-9]+/g, "")
     .toLowerCase();
+}
+
+function normalizeForSearch(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
 function getRegionGeometry(region: ZoneRegionWithRisk): { type: "Polygon" | "MultiPolygon"; coordinates: unknown } | null {
@@ -244,12 +269,14 @@ export function RiskMap({
   regions,
   selectedZoneId,
   selectedRegionId,
-  incidents,
   onSelectZone,
   onSelectRegion,
   onFocusAnchorChange,
 }: RiskMapProps) {
   const mapRef = useRef<MapRef | null>(null);
+  const lastFlownRegionIdRef = useRef<string | null>(null);
+  const justManualFlewRef = useRef(false);
+  const regionFeatureListRef = useRef<typeof regionFeatureList>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [officialCountries, setOfficialCountries] = useState<OfficialCountryCollection | null>(null);
@@ -333,6 +360,7 @@ export function RiskMap({
       .filter(
         (zone) =>
           !matchedCountryCodes.has(zone.countryCode) &&
+          zone.countryCode !== "UK" &&
           Array.isArray(zone.polygon) &&
           zone.polygon.length >= 3,
       )
@@ -409,7 +437,7 @@ export function RiskMap({
           );
           const featureId =
             matchedRegion?.id ??
-            `${zone.id}-adm1-${normalizeLookupText(feature.properties.shapeID ?? regionName)}`;
+            `${countryCode.toLowerCase()}-adm1-${normalizeLookupText(feature.properties.shapeID ?? regionName)}`;
 
           return {
             type: "Feature",
@@ -455,6 +483,10 @@ export function RiskMap({
     [regionFeatureList],
   );
 
+  // Keep a non-reactive ref so the zoom effect can read the latest feature list
+  // without triggering re-runs when the GeoJSON data loads.
+  regionFeatureListRef.current = regionFeatureList;
+
   const searchItems = useMemo<SearchItem[]>(() => {
     const countryItems: SearchItem[] = zones.map((zone) => ({
       id: zone.id,
@@ -474,12 +506,12 @@ export function RiskMap({
   }, [zones, regions]);
 
   const filteredSearchItems = useMemo(() => {
-    const normalized = searchQuery.trim().toLowerCase();
+    const normalized = normalizeForSearch(searchQuery.trim());
     if (!normalized) {
       return searchItems.slice(0, 10);
     }
     return searchItems
-      .filter((item) => item.label.toLowerCase().includes(normalized))
+      .filter((item) => normalizeForSearch(item.label).includes(normalized))
       .slice(0, 12);
   }, [searchItems, searchQuery]);
 
@@ -507,19 +539,44 @@ export function RiskMap({
     }
 
     if (selectedRegion) {
-      mapRef.current.flyTo({
-        center: selectedRegion.center,
-        zoom: 7.8,
-        pitch: 42,
-        bearing: 12,
-        duration: 1100,
-        essential: true,
-      });
-      const handle = window.setTimeout(updateFocusAnchor, 220);
-      return () => window.clearTimeout(handle);
+      // Guard: if we already flew to this exact region ID (e.g. from a map click that
+      // triggered a manual flyTo before data was loaded), don't fly again when the
+      // data resolves — that would cause a visible revert animation.
+      if (lastFlownRegionIdRef.current === selectedRegionId) {
+        return;
+      }
+      lastFlownRegionIdRef.current = selectedRegionId;
+
+      // Try to use fitBounds on the actual rendered GeoJSON feature for accurate
+      // centering. Falls back to pre-computed center if geometry isn't available.
+      const feature = regionFeatureListRef.current.find(
+        (f) => f.properties.id === selectedRegionId,
+      );
+      const bbox = feature ? computeGeometryBbox(feature.geometry as { type: string; coordinates: unknown }) : null;
+      if (bbox) {
+        mapRef.current.fitBounds(
+          [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+          { padding: 80, maxZoom: 9, duration: 1100, pitch: 42, bearing: 12, essential: true },
+        );
+      } else {
+        mapRef.current.flyTo({
+          center: selectedRegion.center,
+          zoom: 7.8,
+          pitch: 42,
+          bearing: 12,
+          duration: 1100,
+          essential: true,
+        });
+      }
+      return;
     }
 
     if (selectedZone) {
+      if (justManualFlewRef.current) {
+        justManualFlewRef.current = false;
+        return;
+      }
+      lastFlownRegionIdRef.current = null;
       mapRef.current.flyTo({
         center: selectedZone.center,
         zoom: 5.4,
@@ -528,10 +585,10 @@ export function RiskMap({
         duration: 1300,
         essential: true,
       });
-      const handle = window.setTimeout(updateFocusAnchor, 220);
-      return () => window.clearTimeout(handle);
+      return;
     }
 
+    lastFlownRegionIdRef.current = null;
     onFocusAnchorChange?.(null);
     mapRef.current.flyTo({
       center: [EUROPE_GLOBE_VIEW.longitude, EUROPE_GLOBE_VIEW.latitude],
@@ -541,7 +598,7 @@ export function RiskMap({
       duration: 1100,
       essential: true,
     });
-  }, [selectedZone, selectedRegion, onFocusAnchorChange, updateFocusAnchor]);
+  }, [selectedZone, selectedRegion, selectedRegionId, onFocusAnchorChange]);
 
   useEffect(() => {
     if (selectedRegion) {
@@ -573,7 +630,7 @@ export function RiskMap({
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       const exactMatch = filteredSearchItems.find(
-        (item) => item.label.toLowerCase() === searchQuery.trim().toLowerCase(),
+        (item) => normalizeForSearch(item.label) === normalizeForSearch(searchQuery.trim()),
       );
       const fallbackMatch = filteredSearchItems[0];
       const target = exactMatch ?? fallbackMatch;
@@ -598,10 +655,21 @@ export function RiskMap({
           onSelectRegion(regionId);
           setSearchQuery(clickedRegionData.name);
         } else {
+          // Region feature has no matching data entry — fly manually and skip
+          // the zone-level flyTo that would otherwise override us.
           onSelectRegion(null);
           if (typeof regionName === "string") {
             setSearchQuery(regionName);
           }
+          justManualFlewRef.current = true;
+          mapRef.current?.flyTo({
+            center: [event.lngLat.lng, event.lngLat.lat],
+            zoom: 7.8,
+            pitch: 42,
+            bearing: 12,
+            duration: 1100,
+            essential: true,
+          });
         }
         return;
       }
@@ -668,25 +736,6 @@ export function RiskMap({
           {selectedRegionId ? <Layer {...getSelectedRegionOutlineLayer(selectedRegionId)} /> : null}
         </Source>
 
-        {incidents.map((incident) => (
-          <Marker
-            key={incident.id}
-            longitude={incident.location[0]}
-            latitude={incident.location[1]}
-            anchor="bottom"
-          >
-            <div className="group relative">
-              <button
-                type="button"
-                className="h-4 w-4 rounded-full border border-rose-200 bg-rose-500 shadow-lg"
-                title={incident.description}
-              />
-              <div className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 hidden -translate-x-1/2 rounded-md bg-slate-950/90 px-2 py-1 text-[11px] text-slate-100 shadow-xl group-hover:block">
-                Reported incident
-              </div>
-            </div>
-          </Marker>
-        ))}
       </Map>
 
       {selectedZoneId ? (
@@ -696,9 +745,9 @@ export function RiskMap({
       <div className="absolute left-4 top-4 z-20 w-full max-w-sm">
         <form
           onSubmit={submitSearch}
-          className="relative rounded-xl border border-slate-600/70 bg-slate-900/85 shadow-lg backdrop-blur-sm"
+          className="relative flex items-center rounded-xl border border-slate-600/70 bg-slate-900/85 shadow-lg backdrop-blur-sm"
         >
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="pointer-events-none ml-3 h-4 w-4 shrink-0 text-slate-400" />
           <input
             value={searchQuery}
             onChange={(event) => {
@@ -707,7 +756,7 @@ export function RiskMap({
             }}
             onFocus={() => setShowSuggestions(true)}
             placeholder="Search country or region (Bacau, Vrancea, Galati)..."
-            className="w-full rounded-xl bg-transparent py-3 pl-10 pr-10 text-sm text-slate-100 outline-none placeholder:text-slate-400"
+            className="min-w-0 flex-1 bg-transparent py-3 pl-3 pr-2 text-sm text-slate-100 outline-none placeholder:text-slate-400"
           />
           {selectedZoneId ? (
             <button
@@ -718,7 +767,7 @@ export function RiskMap({
                 setSearchQuery("");
                 setShowSuggestions(false);
               }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-300 transition hover:bg-slate-700 hover:text-slate-100"
+              className="mr-2 shrink-0 rounded-md p-1 text-slate-300 transition hover:bg-slate-700 hover:text-slate-100"
               aria-label="Clear selection"
             >
               <X className="h-4 w-4" />

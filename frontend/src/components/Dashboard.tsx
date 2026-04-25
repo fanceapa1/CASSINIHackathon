@@ -2,38 +2,36 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
-  Camera,
+  CheckCircle,
   ChevronDown,
   Crown,
   Globe2,
   History,
   Landmark,
-  LocateFixed,
   Lock,
+  LogOut,
   MapPinned,
   PanelRightClose,
   PanelRightOpen,
-  Send,
+  Settings,
   ShieldAlert,
   Sparkles,
   TrendingUp,
+  User,
   Users,
   Waves,
-  X,
 } from "lucide-react";
+import { useAuth } from "../auth/AuthContext";
 import { getAllCountryAdminRegions } from "../data/adminBoundaries";
 import { floodZones, historicalSimulations, informRiskDataSource } from "../data/floodMockData";
 import { DraggableWindow } from "./DraggableWindow";
 import { RiskMap } from "./RiskMap";
-import type { ChangeEvent } from "react";
 import type {
   FloodZone,
   FloodZoneWithRisk,
   GeneratedSimulationResult,
   LngLat,
-  MapAnchorPoint,
   RectBounds,
-  ReportedIncident,
   ZoneRegion,
   ZoneRegionWithRisk,
 } from "../types/flood";
@@ -41,7 +39,6 @@ import type {
 type WindowKey = "past" | "create";
 type SimulationRunState = "idle" | "running" | "complete";
 
-const isPremium = false;
 const SIDEBAR_WIDTH = 356;
 
 const loadingMessages = [
@@ -87,21 +84,6 @@ function getRiskChipClasses(riskLevel: number): string {
   return "bg-rose-500/30 text-rose-100";
 }
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-      reject(new Error("Unable to parse image"));
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("File read failed"));
-    reader.readAsDataURL(file);
-  });
-}
-
 function getStringHash(value: string): number {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -140,15 +122,6 @@ function geometryAreaProxy(region: ZoneRegion): number {
   });
 
   return Math.max((maxLon - minLon) * (maxLat - minLat), 0.0004);
-}
-
-function slugify(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .toLowerCase();
 }
 
 function buildRegionalHistory(regionName: string, regionId: string, baselineRisk: number, estimatedLoss: number) {
@@ -193,10 +166,8 @@ function buildRegionsFromOfficialBoundaries(zone: FloodZone, candidateRegions: Z
     const estimatedLossEurMillions = roundToOneDecimal(
       zone.stats.estimatedHistoricalLossEurMillions * weight * (0.78 + baselineRiskLevel / 190),
     );
-    const regionId = `${zone.countryCode.toLowerCase()}-adm1-${slugify(region.name)}-${index + 1}`;
-
     return {
-      id: regionId,
+      id: region.id,
       name: region.name,
       countryCode: zone.countryCode,
       center: region.center,
@@ -207,7 +178,7 @@ function buildRegionsFromOfficialBoundaries(zone: FloodZone, candidateRegions: Z
       estimatedLossEurMillions,
       historicalEvents: buildRegionalHistory(
         region.name,
-        regionId,
+        region.id,
         baselineRiskLevel,
         estimatedLossEurMillions,
       ),
@@ -228,6 +199,9 @@ function deriveHistoricalRegionRisk(
 }
 
 export default function Dashboard() {
+  const { user, isAdmin, logout } = useAuth();
+  const isPremium = isAdmin || user?.accessScope === "global";
+
   const mapAreaRef = useRef<HTMLDivElement | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
 
@@ -236,11 +210,11 @@ export default function Dashboard() {
   const [activeScenarioId, setActiveScenarioId] = useState<string>("live");
   const [generatedSimulation, setGeneratedSimulation] =
     useState<GeneratedSimulationResult | null>(null);
-  const [focusAnchor, setFocusAnchor] = useState<MapAnchorPoint | null>(null);
   const [mapAreaSize, setMapAreaSize] = useState({ width: 1200, height: 800 });
   const [plansExpanded, setPlansExpanded] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [contextMenuVisible, setContextMenuVisible] = useState(true);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [openWindows, setOpenWindows] = useState<Record<WindowKey, boolean>>({
     past: false,
     create: false,
@@ -249,11 +223,6 @@ export default function Dashboard() {
   const [simulationState, setSimulationState] = useState<SimulationRunState>("idle");
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
 
-  const [incidentDescription, setIncidentDescription] = useState("");
-  const [incidentImages, setIncidentImages] = useState<string[]>([]);
-  const [incidentLocation, setIncidentLocation] = useState<LngLat | null>(null);
-  const [locatingUser, setLocatingUser] = useState(false);
-  const [reportedIncidents, setReportedIncidents] = useState<ReportedIncident[]>([]);
   const [officialRegionsByCountry, setOfficialRegionsByCountry] = useState<
     Record<string, ZoneRegion[]>
   >({});
@@ -444,16 +413,12 @@ export default function Dashboard() {
     ? Boolean(loadingOfficialRegionsByCountry[selectedCountryCode])
     : false;
 
+  const officialRegionsLoadedRef = useRef(false);
   useEffect(() => {
-    if (Object.keys(officialRegionsByCountry).length > 0) {
-      return;
-    }
-    if (Object.values(loadingOfficialRegionsByCountry).some(Boolean)) {
-      return;
-    }
+    if (officialRegionsLoadedRef.current) return;
+    officialRegionsLoadedRef.current = true;
 
     const countryCodes = floodZones.map((zone) => zone.countryCode);
-    let cancelled = false;
 
     setLoadingOfficialRegionsByCountry(
       Object.fromEntries(countryCodes.map((countryCode) => [countryCode, true])),
@@ -461,10 +426,6 @@ export default function Dashboard() {
 
     getAllCountryAdminRegions(countryCodes)
       .then((regionsByCountry) => {
-        if (cancelled) {
-          return;
-        }
-
         const normalizedRegionsByCountry = Object.entries(regionsByCountry).reduce<
           Record<string, ZoneRegion[]>
         >((accumulator, [countryCode, regions]) => {
@@ -498,24 +459,13 @@ export default function Dashboard() {
 
         setOfficialRegionsByCountry(normalizedRegionsByCountry);
       })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-      })
+      .catch(() => {})
       .finally(() => {
-        if (cancelled) {
-          return;
-        }
         setLoadingOfficialRegionsByCountry(
           Object.fromEntries(countryCodes.map((countryCode) => [countryCode, false])),
         );
       });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [officialRegionsByCountry, loadingOfficialRegionsByCountry, zoneSeedsByCountryCode]);
+  }, [zoneSeedsByCountryCode]);
 
   useEffect(() => {
     if (!selectedRegionId) {
@@ -696,18 +646,18 @@ export default function Dashboard() {
   }, [activeScenarioId, generatedSimulation, selectedHistoricalScenario]);
 
   const contextMenuRect = useMemo<RectBounds | null>(() => {
-    if (!selectedZone || !focusAnchor || !contextMenuVisible) {
+    if (!selectedZone || !contextMenuVisible) {
       return null;
     }
     const menuWidth = 248;
-    const menuHeight = 144;
+    const menuHeight = 160;
     return {
       width: menuWidth,
       height: menuHeight,
-      x: clamp(focusAnchor.x + 24, 12, Math.max(12, mapAreaSize.width - menuWidth - 12)),
-      y: clamp(focusAnchor.y + 24, 12, Math.max(12, mapAreaSize.height - menuHeight - 12)),
+      x: mapAreaSize.width - menuWidth - 24,
+      y: mapAreaSize.height - menuHeight - 24,
     };
-  }, [selectedZone, focusAnchor, contextMenuVisible, mapAreaSize.width, mapAreaSize.height]);
+  }, [selectedZone, contextMenuVisible, mapAreaSize.width, mapAreaSize.height]);
 
   const avoidRects = useMemo<RectBounds[]>(
     () => (contextMenuRect ? [contextMenuRect] : []),
@@ -783,7 +733,6 @@ export default function Dashboard() {
         return;
       }
       setSelectedRegionId(null);
-      setFocusAnchor(null);
       setContextMenuVisible(false);
       closeAllWindows();
     },
@@ -879,66 +828,6 @@ export default function Dashboard() {
     setLoadingStepIndex(0);
   }, [selectedZoneId, showToast]);
 
-  const onImageUpload = useCallback(
-    async (event: ChangeEvent<HTMLInputElement>) => {
-      const incomingFiles = Array.from(event.target.files ?? []).slice(0, 4);
-      if (incomingFiles.length === 0) {
-        return;
-      }
-      try {
-        const previews = await Promise.all(incomingFiles.map(fileToDataUrl));
-        setIncidentImages((current) => [...current, ...previews].slice(0, 4));
-      } catch {
-        showToast("Unable to upload selected images.");
-      }
-      event.currentTarget.value = "";
-    },
-    [showToast],
-  );
-
-  const requestLocation = useCallback(() => {
-    if (!navigator.geolocation) {
-      showToast("Geolocation is not available in this browser.");
-      return;
-    }
-
-    setLocatingUser(true);
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setIncidentLocation([position.coords.longitude, position.coords.latitude]);
-        setLocatingUser(false);
-        showToast("Location captured.");
-      },
-      () => {
-        setLocatingUser(false);
-        showToast("Location permission was denied.");
-      },
-      { enableHighAccuracy: true, timeout: 12_000 },
-    );
-  }, [showToast]);
-
-  const submitIncidentReport = useCallback(() => {
-    if (!incidentLocation) {
-      showToast("Add your location before submitting.");
-      return;
-    }
-
-    const incident: ReportedIncident = {
-      id: `incident-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-      description: incidentDescription.trim() || "Flooding incident reported by field user",
-      location: incidentLocation,
-      imagePreviews: incidentImages,
-      zoneId: selectedZoneId,
-    };
-
-    setReportedIncidents((current) => [incident, ...current].slice(0, 24));
-    setIncidentDescription("");
-    setIncidentImages([]);
-    setIncidentLocation(null);
-    showToast("Incident report submitted.");
-  }, [incidentLocation, incidentDescription, incidentImages, selectedZoneId, showToast]);
-
   const selectedZoneRegions = useMemo(
     () =>
       selectedZone
@@ -948,6 +837,26 @@ export default function Dashboard() {
         : [],
     [regionsWithRisk, selectedZone],
   );
+
+  const totalPopulationAtRisk = useMemo(
+    () => floodZones.reduce((sum, zone) => sum + zone.stats.populationAtRisk, 0),
+    [],
+  );
+
+  const successRatePct = useMemo(() => {
+    if (activeScenarioId === "generated" && generatedSimulation) {
+      return clamp(
+        Math.round(
+          ((totalPopulationAtRisk - generatedSimulation.estimatedDisplacement) /
+            totalPopulationAtRisk) *
+            100,
+        ),
+        0,
+        100,
+      );
+    }
+    return selectedEntityFinancials?.savingsPct ?? null;
+  }, [activeScenarioId, generatedSimulation, totalPopulationAtRisk, selectedEntityFinancials]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
@@ -1051,6 +960,24 @@ export default function Dashboard() {
                     </p>
                   </div>
                 </>
+              ) : null}
+
+              {successRatePct !== null ? (
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-300">
+                    <CheckCircle className="h-3.5 w-3.5 text-emerald-300" />
+                    {activeScenarioId === "generated" ? "People protected (global sim)" : "Est. intervention success rate"}
+                  </div>
+                  <p className="mt-2 text-lg font-semibold text-emerald-200">
+                    {successRatePct}%
+                  </p>
+                  {activeScenarioId === "generated" && generatedSimulation ? (
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      {formatNumber(totalPopulationAtRisk - generatedSimulation.estimatedDisplacement)} of{" "}
+                      {formatNumber(totalPopulationAtRisk)} at risk
+                    </p>
+                  ) : null}
+                </div>
               ) : null}
             </div>
 
@@ -1169,94 +1096,50 @@ export default function Dashboard() {
           </div>
         )}
 
-        <section className="mt-5 rounded-xl border border-slate-700/80 bg-slate-800/70 p-4">
-          <h2 className="text-sm font-semibold text-slate-100">Report incident</h2>
-          <p className="mt-1 text-xs text-slate-300">
-            Anyone can upload photos and share current location.
-          </p>
+        <div className="mt-5 rounded-xl border border-slate-700/60 bg-slate-800/60 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-500/20 text-cyan-300">
+                <User className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-slate-100">{user?.name ?? "User"}</p>
+                <p className="text-[11px] text-slate-400">{user?.organization ?? ""}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAccountMenuOpen((v) => !v)}
+              className="rounded-md p-1.5 text-slate-300 transition hover:bg-slate-700 hover:text-slate-100"
+              aria-label="Account settings"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+          </div>
 
-          <textarea
-            value={incidentDescription}
-            onChange={(event) => setIncidentDescription(event.target.value)}
-            placeholder="Describe the incident (example: sudden river level increase)."
-            className="mt-3 h-20 w-full resize-none rounded-lg border border-slate-600/80 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-400"
-          />
-
-          <label className="mt-3 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-600/80 bg-slate-900/75 px-3 py-2 text-xs text-slate-100 transition hover:bg-slate-800">
-            <Camera className="h-3.5 w-3.5" />
-            Upload photos
-            <input type="file" accept="image/*" multiple className="hidden" onChange={onImageUpload} />
-          </label>
-
-          {incidentImages.length > 0 ? (
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {incidentImages.map((preview, index) => (
-                <div
-                  key={`${preview.slice(0, 24)}-${index}`}
-                  className="relative overflow-hidden rounded-md border border-slate-600/70"
-                >
-                  <img src={preview} alt="Incident upload" className="h-16 w-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setIncidentImages((current) =>
-                        current.filter((_, imageIndex) => imageIndex !== index),
-                      )
-                    }
-                    className="absolute right-1 top-1 rounded bg-slate-950/80 p-0.5 text-slate-100"
-                    aria-label="Remove image"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
+          {accountMenuOpen ? (
+            <div className="mt-3 space-y-1 border-t border-slate-700/80 pt-3">
+              <p className="px-2 text-[11px] uppercase tracking-[0.12em] text-slate-400">
+                {isPremium ? "Admin / Global access" : "Regional access"}
+              </p>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-200 transition hover:bg-slate-700/80"
+              >
+                <Lock className="h-3.5 w-3.5" />
+                Change password
+              </button>
+              <button
+                type="button"
+                onClick={logout}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-rose-300 transition hover:bg-rose-500/15"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                Sign out
+              </button>
             </div>
           ) : null}
-
-          <button
-            type="button"
-            onClick={requestLocation}
-            disabled={locatingUser}
-            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-500/25 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-500/40 disabled:opacity-70"
-          >
-            <LocateFixed className="h-3.5 w-3.5" />
-            {locatingUser ? "Detecting location..." : "Use current location"}
-          </button>
-
-          <p className="mt-2 text-[11px] text-slate-300">
-            {incidentLocation
-              ? `Location: ${incidentLocation[1].toFixed(4)}, ${incidentLocation[0].toFixed(4)}`
-              : "Location is not set."}
-          </p>
-
-          <button
-            type="button"
-            onClick={submitIncidentReport}
-            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500/30 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/45"
-          >
-            <Send className="h-3.5 w-3.5" />
-            Submit report
-          </button>
-        </section>
-
-        {reportedIncidents.length > 0 ? (
-          <section className="mt-4 rounded-xl border border-slate-700/80 bg-slate-800/70 p-4">
-            <h2 className="text-sm font-semibold text-slate-100">Recent reports</h2>
-            <div className="mt-2 space-y-2">
-              {reportedIncidents.slice(0, 4).map((incident) => (
-                <div
-                  key={incident.id}
-                  className="rounded-md border border-slate-700/80 bg-slate-900/70 px-3 py-2"
-                >
-                  <p className="text-xs text-slate-100">{incident.description}</p>
-                  <p className="mt-1 text-[11px] text-slate-400">
-                    {new Date(incident.createdAt).toLocaleString("en-GB")}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
+        </div>
       </aside>
 
       <div
@@ -1269,17 +1152,14 @@ export default function Dashboard() {
           regions={regionsWithRisk}
           selectedZoneId={selectedZone?.id ?? null}
           selectedRegionId={selectedRegionId}
-          incidents={reportedIncidents}
           onSelectZone={handleZoneSelection}
           onSelectRegion={handleRegionSelection}
-          onFocusAnchorChange={setFocusAnchor}
         />
 
         <AnimatePresence>
-          {contextMenuRect && selectedZone ? (
+          {selectedZone && contextMenuVisible ? (
             <motion.div
-              className="absolute z-50 w-[248px] rounded-xl border border-slate-700/85 bg-slate-900/90 p-3 shadow-2xl backdrop-blur-sm"
-              style={{ left: contextMenuRect.x, top: contextMenuRect.y }}
+              className="absolute bottom-6 right-6 z-50 w-[248px] rounded-xl border border-slate-700/85 bg-slate-900/90 p-3 shadow-2xl backdrop-blur-sm"
               initial={{ opacity: 0, y: 10, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.97 }}
@@ -1319,10 +1199,14 @@ export default function Dashboard() {
                     <Sparkles className="h-4 w-4" />
                     Create simulation
                   </span>
-                  <span className="inline-flex items-center gap-1 text-xs text-violet-200">
-                    <Lock className="h-3 w-3" />
-                    Premium
-                  </span>
+                  {isPremium ? (
+                    <span className="text-xs text-violet-200/75">Unlocked</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs text-violet-200">
+                      <Lock className="h-3 w-3" />
+                      Premium
+                    </span>
+                  )}
                 </button>
               </div>
             </motion.div>
@@ -1333,7 +1217,7 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => setContextMenuVisible(true)}
-            className="absolute right-4 top-20 z-50 inline-flex items-center gap-2 rounded-lg border border-slate-600/85 bg-slate-900/90 px-3 py-2 text-xs text-slate-100 shadow-xl backdrop-blur-sm transition hover:bg-slate-800"
+            className="absolute bottom-6 right-6 z-50 inline-flex items-center gap-2 rounded-lg border border-slate-600/85 bg-slate-900/90 px-3 py-2 text-xs text-slate-100 shadow-xl backdrop-blur-sm transition hover:bg-slate-800"
           >
             <PanelRightOpen className="h-3.5 w-3.5" />
             Show actions
