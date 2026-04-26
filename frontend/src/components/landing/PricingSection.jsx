@@ -30,8 +30,7 @@ const PricingSection = ({ onContactClick }) => {
             className="font-heading text-3xl font-bold uppercase tracking-[0.04em] text-slate-100 sm:text-4xl"
           />
           <p className="mx-auto mt-4 max-w-2xl font-body text-base text-slate-300 sm:text-lg">
-            Alege nivelul potrivit pentru echipa ta si extinde functionalitatile pe masura ce
-            cresc operatiunile.
+            Choose the right plan for your team and expand functionalities as your operations grow.
           </p>
         </motion.div>
 
@@ -42,15 +41,15 @@ const PricingSection = ({ onContactClick }) => {
             transition={{ duration: 0.62, delay: 0.1, ease: "easeOut" }}
             className="rounded-[26px] border border-cyan-100/20 bg-[#071326]/80 p-8 shadow-[0_26px_60px_-38px_rgba(0,0,0,0.9)] backdrop-blur will-change-transform"
           >
-            <h3 className="font-heading text-2xl font-bold uppercase text-slate-100">Plan Free</h3>
+            <h3 className="font-heading text-2xl font-bold uppercase text-slate-100">Free Plan</h3>
             <p className="mt-3 font-body text-slate-300">
-              Pentru echipe mici care vor control rapid al alertelor esentiale.
+              For small teams wanting quick control over essential alerts.
             </p>
             <ul className="mt-6 space-y-3 font-body text-sm text-slate-300 sm:text-base">
-              <li>- Dashboard de monitorizare in timp real</li>
-              <li>- Notificari de baza pe alerte critice</li>
-              <li>- Istoric incident limitat</li>
-              <li>- 3 utilizatori activi</li>
+              <li>- Real-time monitoring dashboard</li>
+              <li>- Basic notifications for critical alerts</li>
+              <li>- Limited incident history</li>
+              <li>- 3 active users</li>
             </ul>
           </motion.article>
 
@@ -60,23 +59,22 @@ const PricingSection = ({ onContactClick }) => {
             transition={{ duration: 0.62, delay: 0.18, ease: "easeOut" }}
             className="rounded-[26px] border border-cyan-200/25 bg-[linear-gradient(155deg,rgba(6,22,42,0.95)_0%,rgba(8,31,56,0.9)_72%,rgba(30,79,112,0.52)_100%)] p-8 shadow-[0_26px_60px_-38px_rgba(0,0,0,0.92)] will-change-transform"
           >
-            <h3 className="font-heading text-2xl font-bold uppercase text-slate-100">Plan Paid</h3>
+            <h3 className="font-heading text-2xl font-bold uppercase text-slate-100">Paid Plan</h3>
             <p className="mt-3 font-body text-slate-200">
-              Pentru organizatii care au nevoie de extindere, automatizare si capabilitati AI
-              avansate.
+              For organizations that need to scale, with automation and advanced AI capabilities.
             </p>
             <ul className="mt-6 space-y-3 font-body text-sm text-slate-200 sm:text-base">
-              <li>- Mai multe profiluri de agenti AI specializati</li>
-              <li>- Reguli automate de escaladare si prioritate</li>
-              <li>- Integrare agent AI propriu</li>
-              <li>- Securitate enterprise si audit complet</li>
+              <li>- Multiple specialized AI agent profiles</li>
+              <li>- Automated escalation and priority rules</li>
+              <li>- Custom AI agent integration</li>
+              <li>- Enterprise security and complete audit logging</li>
             </ul>
             <button
               type="button"
               onClick={onContactClick}
               className="mt-8 rounded-full bg-cyan-300 px-6 py-3 font-body text-sm font-bold uppercase tracking-[0.08em] text-slate-950 transition hover:bg-cyan-200 sm:text-base"
             >
-              Contacteaza-ne pentru oferta
+              Contact us for a quote
             </button>
           </motion.article>
         </div>

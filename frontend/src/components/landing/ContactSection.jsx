@@ -13,9 +13,10 @@ const ContactSection = ({ sectionRef }) => {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    setStatus("Se trimite...");
+    setStatus("Sending...");
 
     const formData = new FormData(event.target);
+    // Recomandare: Mută acest access_key într-un fișier .env
     formData.append("access_key", "cb5ff32d-5f64-4606-af08-3bb96cb11df2");
 
     try {
@@ -27,15 +28,15 @@ const ContactSection = ({ sectionRef }) => {
       const data = await response.json();
 
       if (data.success) {
-        setStatus("Mesaj trimis cu succes! Vom reveni curand.");
+        setStatus("Message sent successfully! We will get back to you soon.");
         event.target.reset();
       } else {
-        console.error("Eroare Web3Forms:", data);
-        setStatus("A aparut o eroare. Te rugam sa incerci din nou.");
+        console.error("Web3Forms Error:", data);
+        setStatus("An error occurred. Please try again.");
       }
     } catch (error) {
-      console.error("Eroare de retea:", error);
-      setStatus("Eroare de retea. Verifica conexiunea.");
+      console.error("Network Error:", error);
+      setStatus("Network error. Please check your connection.");
     }
   };
 
@@ -58,8 +59,7 @@ const ContactSection = ({ sectionRef }) => {
             className="font-heading text-3xl font-bold uppercase tracking-[0.04em] text-slate-100 sm:text-4xl"
           />
           <p className="max-w-md font-body text-base leading-relaxed text-slate-300 sm:text-lg">
-            Daca vrei o demonstratie personalizata sau o oferta pentru organizatia ta, trimite-ne
-            cateva detalii si revenim rapid.
+            If you want a personalized demo or a quote for your organization, send us a few details and we will get back to you shortly.
           </p>
           <div className="space-y-2 font-body text-sm text-slate-400 sm:text-base">
             <p>hello@synoptis.com</p>
@@ -77,12 +77,12 @@ const ContactSection = ({ sectionRef }) => {
         >
           <div className="grid gap-5">
             <label className="font-body text-sm font-semibold text-slate-200">
-              Nume
+              Name
               <input
                 type="text"
                 name="name"
                 required
-                placeholder="Numele tau"
+                placeholder="Your name"
                 className="mt-2 w-full rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60"
               />
             </label>
@@ -93,18 +93,18 @@ const ContactSection = ({ sectionRef }) => {
                 type="email"
                 name="email"
                 required
-                placeholder="nume@companie.ro"
+                placeholder="name@company.com"
                 className="mt-2 w-full rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60"
               />
             </label>
 
             <label className="font-body text-sm font-semibold text-slate-200">
-              Mesaj
+              Message
               <textarea
                 name="message"
                 required
                 rows={5}
-                placeholder="Spune-ne pe scurt ce tip de suport sau oferta cauti."
+                placeholder="Tell us briefly what kind of support or quote you are looking for."
                 className="mt-2 w-full resize-none rounded-xl border border-cyan-100/20 bg-[#030c1c] px-4 py-3 font-body text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-200/60"
               />
             </label>
@@ -112,15 +112,15 @@ const ContactSection = ({ sectionRef }) => {
             <button
               type="submit"
               className="rounded-full bg-cyan-300 px-6 py-3 font-body text-sm font-bold uppercase tracking-[0.08em] text-slate-950 transition hover:bg-cyan-200 sm:text-base disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={status === "Se trimite..."}
+              disabled={status === "Sending..."}
             >
-              {status === "Se trimite..." ? "Se trimite..." : "Trimite Mesaj"}
+              {status === "Sending..." ? "Sending..." : "Send Message"}
             </button>
 
-            {status && status !== "Se trimite..." && (
+            {status && status !== "Sending..." && (
               <p
                 className={`font-body text-sm font-semibold ${
-                  status.includes("succes") ? "text-green-400" : "text-red-400"
+                  status.includes("success") ? "text-green-400" : "text-red-400"
                 }`}
               >
                 {status}
