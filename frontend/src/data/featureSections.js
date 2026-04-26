@@ -5,26 +5,26 @@ import predictiveAiImage from "../assets/predictive-ai.svg";
 export const featureSections = [
   {
     id: "real-time-alerts",
-    title: "Alerta In Timp Real",
+    title: "Real-Time Flood Intelligence",
     description:
-      "Centralizezi semnalele critice din teren intr-un singur flux live. Echipele vad instant ce se intampla, unde se intampla si ce nivel de urgenta are fiecare incident.",
+      "Centralize critical signals using Copernicus Sentinel-1 satellite processing and the JRC INFORM Risk Index. Get instant visibility on observed flood extents and risk levels across EU boundaries.",
     image: alertControlImage,
-    imageAlt: "Dashboard pentru alerta in timp real"
+    imageAlt: "Live flood monitoring dashboard using satellite data"
   },
   {
     id: "field-coordination",
-    title: "Coordonare Echipe In Teren",
+    title: "Swarm Evacuation Simulation",
     description:
-      "Distribui resursele inteligent si urmaresti progresul operatiunilor in fiecare punct. Fluxurile de lucru devin clare, iar deciziile se iau rapid, cu context complet.",
+      "Simulate and manage crisis zones using advanced swarm intelligence. Integrated Hermes AI agents help distribute rescue resources and map secure evacuation routes during dynamic disaster events.",
     image: coordinationImage,
-    imageAlt: "Retea de coordonare echipe"
+    imageAlt: "Swarm intelligence network for emergency coordination"
   },
   {
     id: "predictive-models",
-    title: "Modele Predictive Cu AI",
+    title: "AI & Graph Topology Models",
     description:
-      "Analizezi tipare de risc si anticipezi evolutia evenimentelor inainte sa escaladeze. Platforma iti ofera recomandari actionabile pentru prioritizare si raspuns eficient.",
+      "Analyze cascading disaster impacts with dynamic Neo4j network graphs. Automatically evaluate regional topologies to anticipate flood progression and generate actionable insights before the situation escalates.",
     image: predictiveAiImage,
-    imageAlt: "Grafic cu modele predictive AI"
+    imageAlt: "Neo4j predictive graph and AI topology models"
   }
 ];
