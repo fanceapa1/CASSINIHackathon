@@ -1,5 +1,7 @@
 # ECHO-SWARM Flood Risk Dashboard
 
+[Watch the demo](./demo.mp4)
+
 ECHO-SWARM is a hackathon prototype for EU flood-risk inspection and evacuation simulation. The frontend shows EU country and ADM1 administrative boundaries, sourced flood-risk scores, and Copernicus-backed observed flood extent when the backend can compute it. The backend exposes a FastAPI bridge around Copernicus/CDSE flood processing, Neo4j graph refreshes, and the swarm simulation UI.
 
 ## Repository Layout
