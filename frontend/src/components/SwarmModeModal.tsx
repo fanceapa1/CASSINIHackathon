@@ -9,7 +9,10 @@ interface SwarmModeModalProps {
 }
 
 const DEFAULT_SWARM_UI_URL =
-  import.meta.env.VITE_ECHOSWARM_UI_URL ?? "http://localhost:8000/ui/swarm";
+  import.meta.env.VITE_ECHOSWARM_UI_URL ??
+  (import.meta.env.VITE_ECHOSWARM_API_URL
+    ? `${import.meta.env.VITE_ECHOSWARM_API_URL}/ui/swarm`
+    : "http://localhost:8000/ui/swarm");
 
 export function SwarmModeModal({
   isOpen,
