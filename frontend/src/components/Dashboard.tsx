@@ -207,6 +207,46 @@ function estimateLossFromPopulationRisk(
   return Math.round((population / 1_000_000) * (riskLevel / 100) * 430 * 10) / 10;
 }
 
+function stableRegionWeight(seed: string): number {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+  }
+  return 0.75 + ((hash % 61) / 100);
+}
+
+function buildRegionPopulationEstimates(
+  regions: Pick<ZoneRegionWithRisk, "id" | "name">[],
+  totalPopulation: number | null,
+): Record<string, number> {
+  if (!isFiniteNumber(totalPopulation) || regions.length === 0) {
+    return {};
+  }
+
+  const weights = regions.map((region) => stableRegionWeight(region.id || region.name));
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+  if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
+    return {};
+  }
+
+  const estimates: Record<string, number> = {};
+  let allocated = 0;
+
+  regions.forEach((region, index) => {
+    const estimate = Math.max(1000, Math.round((totalPopulation * weights[index]) / totalWeight));
+    estimates[region.id] = estimate;
+    allocated += estimate;
+  });
+
+  const remainder = Math.round(totalPopulation - allocated);
+  const firstRegionId = regions[0]?.id;
+  if (firstRegionId && remainder !== 0) {
+    estimates[firstRegionId] = Math.max(1000, estimates[firstRegionId] + remainder);
+  }
+
+  return estimates;
+}
+
 function roundTo(value: number, digits: number): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
@@ -297,17 +337,21 @@ function mergeOfficialMetricsWithEstimated(
   official: OfficialMetricsPayload,
   estimated: OfficialMetricsPayload,
 ): OfficialMetricsPayload {
+  const isPublishedOfficialMetric = (
+    metric: OfficialMetricField | null | undefined,
+  ): boolean => Boolean(metric && metric.status === "available" && metricHasValue(metric));
+
   const pickMetric = (
     officialMetric: OfficialMetricField | null | undefined,
     estimatedMetric: OfficialMetricField,
-  ): OfficialMetricField => (metricHasValue(officialMetric) ? officialMetric! : estimatedMetric);
+  ): OfficialMetricField => (isPublishedOfficialMetric(officialMetric) ? officialMetric! : estimatedMetric);
 
   const hasPublishedOfficialMetric = [
     official.average_elevation,
     official.water_volume,
     official.observed_flood_area,
     official.estimated_financial_loss,
-  ].some((metric) => Boolean(metric && metric.status === "available" && isFiniteNumber(metric.value)));
+  ].some(isPublishedOfficialMetric);
 
   return {
     status: hasPublishedOfficialMetric ? "available" : "estimated",
@@ -827,12 +871,25 @@ export default function Dashboard() {
       (!selectedRegion ? countryBoundsByCode[selectedZone.countryCode] ?? null : null);
 
     const riskScore100 =
+      selectedRegion?.riskLevel ??
       informFloodScores2026ByIso2[selectedZone.countryCode]?.combinedFloodScore100 ??
       selectedZone.riskLevel;
-    const populationEstimate =
+
+    const countryPopulationEstimate =
       countryPopulations[selectedZone.countryCode]?.value ??
       COUNTRY_POPULATION_ESTIMATES[selectedZone.countryCode] ??
       null;
+
+    const regionPopulationEstimatesById = buildRegionPopulationEstimates(
+      regionsWithRisk.filter((region) => region.countryId === selectedZone.id),
+      countryPopulationEstimate,
+    );
+
+    const selectedRegionPopulation = selectedRegion
+      ? selectedRegion.population ?? regionPopulationEstimatesById[selectedRegion.id] ?? null
+      : null;
+
+    const populationEstimate = selectedRegion ? selectedRegionPopulation : countryPopulationEstimate;
     const asOf = new Date().toISOString().slice(0, 10);
 
     const estimatedFallback = buildEstimatedOfficialMetricsPayload({
@@ -892,7 +949,7 @@ export default function Dashboard() {
     return () => {
       controller.abort();
     };
-  }, [countryBoundsByCode, countryPopulations, selectedRegion, selectedZone]);
+  }, [countryBoundsByCode, countryPopulations, regionsWithRisk, selectedRegion, selectedZone]);
 
   const selectedEntityFinancials = useMemo(() => {
     if (!selectedZone) {
@@ -1131,21 +1188,32 @@ export default function Dashboard() {
     selectedCountryPopulation?.value ??
     (selectedCountryCode ? COUNTRY_POPULATION_ESTIMATES[selectedCountryCode] ?? null : null);
 
+  const regionPopulationEstimatesById = useMemo(
+    () => buildRegionPopulationEstimates(selectedZoneRegions, selectedCountryPopulationValue),
+    [selectedCountryPopulationValue, selectedZoneRegions],
+  );
+
   const defaultRegionPopulation =
     isFiniteNumber(selectedCountryPopulationValue) && selectedZoneRegions.length > 0
       ? Math.round(selectedCountryPopulationValue / selectedZoneRegions.length)
       : null;
 
+  const selectedRegionPopulationEstimate = selectedRegion
+    ? regionPopulationEstimatesById[selectedRegion.id] ?? null
+    : null;
+
   const selectedPopulation = selectedRegion
-    ? selectedRegion.population ?? defaultRegionPopulation
+    ? selectedRegion.population ?? selectedRegionPopulationEstimate ?? defaultRegionPopulation
     : selectedCountryPopulationValue;
   const populationCardTitle = selectedRegion ? "Region population" : "Country population";
   const populationSourceLabel = selectedRegion
     ? isFiniteNumber(selectedRegion.population)
       ? "Source: Region dataset"
-      : isFiniteNumber(defaultRegionPopulation)
-        ? "Source: Estimated regional split from country population"
-        : "Source: -"
+      : isFiniteNumber(selectedRegionPopulationEstimate)
+        ? "Source: Estimated regional profile from country population"
+        : isFiniteNumber(defaultRegionPopulation)
+          ? "Source: Estimated regional split from country population"
+          : "Source: -"
     : selectedCountryPopulation
       ? `Source: ${eurostatPopulationSource.dataset}${
           selectedCountryPopulation.timePeriod ? ` | ${selectedCountryPopulation.timePeriod}` : ""
@@ -1429,12 +1497,16 @@ export default function Dashboard() {
                   >
                     <p className="text-sm text-slate-100">{region.name}</p>
                     <p className="mt-1 text-[11px] text-slate-300">
-                      Country risk {region.riskLevel} | Population{" "}
-                      {formatNumber(region.population ?? defaultRegionPopulation)} | Loss{" "}
+                      Region risk {region.riskLevel} | Population{" "}
+                      {formatNumber(
+                        region.population ?? regionPopulationEstimatesById[region.id] ?? defaultRegionPopulation,
+                      )} | Loss{" "}
                       {formatCurrencyMillions(
                         region.estimatedLossEurMillions ??
                           estimateLossFromPopulationRisk(
-                            region.population ?? defaultRegionPopulation,
+                            region.population ??
+                              regionPopulationEstimatesById[region.id] ??
+                              defaultRegionPopulation,
                             region.riskLevel,
                           ),
                       )}
