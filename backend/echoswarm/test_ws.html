@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ECHO-SWARM · Live Mission Control</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Leaflet Draw -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"/>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<!-- vis-network: Knowledge Graph topology visualizer -->
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 24px; }
+  h1 { font-size: 1.4rem; color: #58a6ff; margin-bottom: 20px; letter-spacing: 0.05em; display: flex; align-items: center; gap: 10px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.3); transition: border-color 0.6s ease; }
+  .card.archived { border-color: #388bfd; }
+  .card h2 { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.1em;
+             margin-bottom: 15px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+
+  .stat { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .stat .label { color: #8b949e; font-size: 0.85rem; }
+  .stat .value { font-weight: bold; font-family: 'Courier New', monospace; font-size: 1.1rem; transition: color 0.4s ease; }
+  .value.green  { color: #3fb950; }
+  .value.red    { color: #f85149; }
+  .value.yellow { color: #d29922; }
+  .value.blue   { color: #58a6ff; }
+
+  .progress-bar { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; margin: 10px 0 20px 0; }
+  .progress-fill { height: 100%; background: #58a6ff; width: 0%; transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+  .progress-fill.done { background: #3fb950; }
+
+  .log { background: #010409; border: 1px solid #30363d; border-radius: 8px; padding: 12px;
+         height: 200px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.8rem; line-height: 1.6; }
+  .log .ts     { color: #484f58; }
+  .log .tick   { color: #58a6ff; }
+  .log .ok     { color: #3fb950; font-weight: bold; }
+  .log .err    { color: #f85149; }
+  .log .info   { color: #8b949e; }
+  .log .header { color: #8b949e; border-bottom: 1px solid #21262d; margin-bottom: 5px; }
+
+  /* Hermes Broadcast box */
+  .broadcast-box {
+    background: #0d1117; border: 1px solid #f2cc60; border-radius: 8px; padding: 20px;
+    margin-top: 16px; display: none; opacity: 0; transform: translateY(10px);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+  }
+  .broadcast-box.visible { display: block; opacity: 1; transform: translateY(0); }
+  .broadcast-box h2 { font-size: 0.75rem; color: #f2cc60; text-transform: uppercase;
+                      letter-spacing: 0.1em; margin-bottom: 15px;
+                      border-bottom: 1px solid #f2cc6040; padding-bottom: 8px; }
+  .broadcast-text {
+    font-size: 1rem; line-height: 1.7; color: #e6edf3;
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    padding: 16px; white-space: pre-wrap; font-family: Georgia, serif;
+    border-left: 4px solid #f2cc60;
+  }
+
+  /* SOP box */
+  .sop-box { background: #0d1117; border: 1px solid #388bfd; border-radius: 8px; padding: 20px;
+             margin-top: 16px; display: none; opacity: 0; transform: translateY(10px);
+             transition: opacity 0.5s ease, transform 0.5s ease; }
+  .sop-box.visible { display: block; opacity: 1; transform: translateY(0); }
+  .sop-content { font-size: 0.9rem; line-height: 1.6; color: #cdd9e5; }
+  .sop-content h1, .sop-content h2, .sop-content h3 { color: #58a6ff; margin: 15px 0 10px 0; font-size: 1.1rem; }
+  .sop-content ul { margin-left: 20px; margin-bottom: 10px; }
+  .sop-content strong { color: #f2cc60; }
+
+  .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #484f58; margin-right: 8px; }
+  .status-dot.live    { background: #3fb950; box-shadow: 0 0 8px #238636; animation: pulse 1.5s infinite; }
+  .status-dot.done    { background: #58a6ff; }
+  .status-dot.error   { background: #f85149; }
+  @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+
+  button { background: #238636; border: 1px solid #2ea043; color: #fff; padding: 10px 24px;
+           border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.2s; }
+  button:hover { background: #2ea043; transform: translateY(-1px); }
+  button:disabled { background: #21262d; border-color: #30363d; opacity: 0.6; cursor: not-allowed; transform: none; }
+
+  #controls {
+    margin-bottom: 24px; background: #161b22; padding: 15px; border-radius: 8px;
+    border: 1px solid #30363d; display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  }
+  .agent-control { display: flex; align-items: center; gap: 10px; }
+  .agent-control label { color: #8b949e; font-size: 0.85rem; white-space: nowrap; }
+  .agent-control input[type="range"] {
+    width: 160px; accent-color: #58a6ff; cursor: pointer;
+  }
+  .agent-control input[type="number"] {
+    width: 75px; background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+    border-radius: 4px; padding: 4px 8px; font-family: 'Courier New', monospace;
+    font-size: 0.9rem; text-align: center;
+  }
+  .agent-hint { font-size: 0.75rem; color: #484f58; }
+
+  /* Dual-map mission intelligence */
+  .sat-card { margin-top: 16px; }
+  .dual-map-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+  .map-panel { display: flex; flex-direction: column; gap: 6px; }
+  .map-label { font-size: 0.72rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.08em; font-weight: bold; }
+  .map-wrap { position: relative; }
+  #sat-map, #fleet-map { height: 380px; border-radius: 6px; border: 1px solid #30363d; }
+  .map-overlay {
+    position: absolute; inset: 0; z-index: 1000; border-radius: 6px;
+    background: rgba(13,17,23,0.82); backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 0.4s ease;
+  }
+  .map-overlay.hidden { opacity: 0; pointer-events: none; }
+  .map-overlay span { color: #484f58; font-size: 0.82rem; font-family: 'Courier New', monospace; letter-spacing: 0.04em; }
+  .btn-playback {
+    background: #1f3a5f; border: 1px solid #388bfd; color: #58a6ff;
+    padding: 9px 18px; border-radius: 6px; cursor: pointer; font-weight: bold;
+    font-size: 0.85rem; width: 100%; transition: all 0.2s; margin-top: 2px;
+  }
+  .btn-playback:hover:not(:disabled) { background: #2952a3; transform: translateY(-1px); }
+  .btn-playback:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  .playback-ticker { font-size: 0.75rem; color: #484f58; font-family: 'Courier New', monospace; text-align: center; }
+  .sat-controls-row { margin-top: 16px; padding-top: 14px; border-top: 1px solid #21262d; }
+  .bbox-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .bbox-field { display: flex; flex-direction: column; gap: 4px; }
+  .bbox-field label { font-size: 0.75rem; color: #8b949e; }
+  .bbox-field input {
+    background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+    border-radius: 4px; padding: 6px 10px; font-family: 'Courier New', monospace;
+    font-size: 0.85rem; width: 100%;
+  }
+  .bbox-field input:focus { outline: none; border-color: #58a6ff; }
+  .sat-date-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .sat-date-row label { font-size: 0.85rem; color: #8b949e; white-space: nowrap; }
+  .sat-date-row input[type="date"] {
+    background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+    border-radius: 4px; padding: 6px 10px; font-size: 0.85rem; flex: 1;
+  }
+  .btn-sat { background: #1f3a5f; border-color: #388bfd; margin-top: 12px; width: 100%; }
+  .btn-sat:hover { background: #2952a3; }
+  #sat-status {
+    margin-top: 10px; padding: 10px; border-radius: 6px; font-size: 0.82rem;
+    font-family: 'Courier New', monospace; display: none;
+    border: 1px solid #30363d; background: #010409; color: #8b949e;
+  }
+  #sat-status.live     { border-color: #3fb950; color: #3fb950; }
+  #sat-status.fallback { border-color: #d29922; color: #d29922; }
+  #sat-status.error    { border-color: #f85149; color: #f85149; }
+  .draw-hint { font-size: 0.78rem; color: #484f58; margin-top: 4px; font-style: italic; }
+
+  /* Mission Evolution Panel */
+  #mission-panel { margin-top: 16px; }
+  .mission-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+  .mission-table-wrap { overflow-x: auto; }
+  .mission-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .mission-table th { color: #8b949e; font-weight: 600; text-align: left; padding: 6px 10px; border-bottom: 1px solid #30363d; }
+  .mission-table td { padding: 6px 10px; border-bottom: 1px solid #21262d; color: #e6edf3; vertical-align: middle; }
+  .mission-table tr:last-child td { border-bottom: none; }
+  .mission-table .best-run td { background: rgba(63, 185, 80, 0.08); }
+  .delta-up { color: #3fb950; font-weight: 700; }
+  .delta-down { color: #f85149; font-weight: 700; }
+  .delta-neutral { color: #8b949e; }
+  .sop-snippet { color: #8b949e; font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mission-chart-wrap canvas { max-height: 200px; }
+
+  /* Topology button */
+  #btn-topology { background: #1a3a5c; border-color: #388bfd; }
+  #btn-topology:hover { background: #1f4e79; }
+
+  /* Topology modal */
+  #topology-modal {
+    display: none; position: fixed; inset: 0; z-index: 9999;
+    align-items: center; justify-content: center;
+  }
+  #topology-modal.open { display: flex; }
+  #topology-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(1, 4, 9, 0.92); backdrop-filter: blur(6px);
+  }
+  #topology-box {
+    position: relative; width: 90vw; height: 88vh;
+    background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #topology-header {
+    display: flex; align-items: center; gap: 12px; padding: 14px 20px;
+    border-bottom: 1px solid #30363d; flex-shrink: 0;
+  }
+  #topology-title { color: #58a6ff; font-weight: 700; font-size: 1rem; letter-spacing: .04em; }
+  #topology-stats-badge {
+    flex: 1; color: #8b949e; font-size: 12px;
+  }
+  #topology-close {
+    background: #21262d; border-color: #30363d; padding: 6px 14px;
+    font-size: 13px; font-weight: 600;
+  }
+  #topology-close:hover { background: #30363d; transform: none; }
+  #topology-canvas-wrap {
+    flex: 1; min-height: 0; position: relative; background: #0d1117;
+  }
+  #topology-canvas { width: 100%; height: 100%; }
+  #topology-loading {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    color: #8b949e; font-size: 14px; gap: 12px; pointer-events: none;
+  }
+  #topology-loading .spin {
+    width: 28px; height: 28px; border: 3px solid #30363d;
+    border-top-color: #388bfd; border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #topology-footer {
+    display: flex; align-items: center; gap: 20px; padding: 10px 20px;
+    border-top: 1px solid #30363d; flex-shrink: 0; font-size: 12px; color: #8b949e;
+  }
+  .topo-legend-item { display: flex; align-items: center; gap: 6px; }
+  .topo-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .topo-line { width: 20px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<h1><span>⚡</span> ECHO-SWARM · WebSocket Mission Control</h1>
+
+<div id="controls">
+  <button id="btn-run" onclick="runSimulation()">▶ Launch Simulation</button>
+  <button id="btn-topology" onclick="openTopologyModal()">🕸️ Graph Topology</button>
+  <span class="status-dot" id="dot"></span>
+  <span id="status-label" style="color: #8b949e;">System Ready</span>
+
+  <div class="agent-control">
+    <label for="agent-slider">Swarm Size</label>
+    <input type="range" id="agent-slider" min="100" max="5000" step="100" value="500"
+           oninput="syncAgentInput(this.value)">
+    <input type="number" id="agent-number" min="1" max="5000" step="100" value="500"
+           oninput="syncAgentSlider(this.value)">
+    <span class="agent-hint">(max 5 000 · &gt;2 000 slower)</span>
+  </div>
+</div>
+
+<!-- Knowledge Graph Topology Modal -->
+<div id="topology-modal">
+  <div id="topology-backdrop" onclick="closeTopologyModal()"></div>
+  <div id="topology-box">
+    <div id="topology-header">
+      <span id="topology-title">🕸️ Neo4j Knowledge Graph — Road Network Topology</span>
+      <span id="topology-stats-badge">Loading…</span>
+      <button id="topology-close" onclick="closeTopologyModal()">✕ Close</button>
+    </div>
+    <div id="topology-canvas-wrap">
+      <div id="topology-canvas"></div>
+      <div id="topology-loading">
+        <div class="spin"></div>
+        <span>Building graph topology…</span>
+      </div>
+    </div>
+    <div id="topology-footer">
+      <div class="topo-legend-item"><div class="topo-dot" style="background:#1f6feb;border:1px solid #388bfd;"></div> Passable junction</div>
+      <div class="topo-legend-item"><div class="topo-dot" style="background:#da3633;border:1px solid #f85149;"></div> Flood-affected junction</div>
+      <div class="topo-legend-item"><div class="topo-line" style="background:#388bfd;opacity:.5;"></div> Open road</div>
+      <div class="topo-legend-item"><div class="topo-line" style="background:#f85149;"></div> Flooded road</div>
+      <span style="margin-left:auto;font-size:11px;">Hover nodes for details · Drag to explore · Scroll to zoom</span>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card" id="card-telemetry">
+    <h2>Live Fleet Telemetry</h2>
+    <div class="stat">
+      <span class="label">Current Tick</span>
+      <span class="value blue" id="tick">0</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+
+    <div class="stat">
+      <span class="label">Safe / Evacuated</span>
+      <span class="value green" id="safe">0</span>
+    </div>
+    <div class="stat">
+      <span class="label">Actively Evacuating</span>
+      <span class="value yellow" id="evacuating">0</span>
+    </div>
+    <div class="stat">
+      <span class="label">Cognitive Awareness (Informed)</span>
+      <span class="value" id="informed">0</span>
+    </div>
+    <div class="stat">
+      <span class="label">Information Preservation</span>
+      <span class="value blue" id="preservation">0%</span>
+    </div>
+  </div>
+
+  <div class="card" id="card-analysis">
+    <h2>Post-Action Analysis</h2>
+    <div class="stat">
+      <span class="label">Final Evacuation Rate</span>
+      <span class="value green" id="evac-rate">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Stranded Agents</span>
+      <span class="value red" id="stranded">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Hermes Clarity Score</span>
+      <span class="value blue" id="clarity">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Critic Diagnosis</span>
+      <span class="value yellow" id="diagnosis" style="font-size:0.8rem; text-align: right; max-width: 60%;">—</span>
+    </div>
+    <div style="margin-top: 18px;">
+      <span class="label" style="display:block; margin-bottom: 8px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: #8b949e;">Information Decay Curve</span>
+      <canvas id="decay-chart" height="80" style="width:100%;"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Raw Data Stream</h2>
+  <div class="log" id="log"></div>
+</div>
+
+<!-- Task 1: Hermes Evacuation Broadcast -->
+<div class="broadcast-box" id="broadcast-box">
+  <h2>📢 Hermes Evacuation Broadcast</h2>
+  <div class="broadcast-text" id="broadcast-text"></div>
+</div>
+
+<!-- SOP Re-Calibration -->
+<div class="sop-box" id="sop-box">
+  <h2 style="font-size:0.75rem; color: #58a6ff; text-transform: uppercase; letter-spacing: 0.1em;
+             border-bottom: 1px solid #388bfd40; padding-bottom: 8px; margin-bottom: 15px;">
+    📡 Autonomous SOP Re-Calibration
+  </h2>
+  <div id="sop-text" class="sop-content"></div>
+</div>
+
+<!-- Dual-Map Mission Intelligence -->
+<div class="card sat-card">
+  <h2>🗺️ Dual-Map Mission Intelligence</h2>
+  <div class="dual-map-grid">
+    <!-- Map A: Satellite Flood Injection -->
+    <div class="map-panel">
+      <div class="map-label">🛰️ Satellite Flood Injection</div>
+      <div class="map-wrap">
+        <div id="sat-map"></div>
+        <div class="map-overlay" id="map-overlay-a">
+          <span>Run a simulation to see flood data</span>
+        </div>
+      </div>
+      <p class="draw-hint">Draw a rectangle to set bounding box for satellite refresh.</p>
+    </div>
+    <!-- Map B: Live Fleet Deployment -->
+    <div class="map-panel">
+      <div class="map-label">🤖 Live Fleet Deployment</div>
+      <div class="map-wrap">
+        <div id="fleet-map"></div>
+        <div class="map-overlay" id="map-overlay-b">
+          <span>Run a simulation to replay agent movement</span>
+        </div>
+      </div>
+      <button class="btn-playback" id="btn-playback" disabled onclick="startPlayback()">
+        ▶️ Start Mission Playback
+      </button>
+      <div class="playback-ticker" id="playback-ticker">—</div>
+    </div>
+  </div>
+  <!-- Satellite controls row -->
+  <div class="sat-controls-row">
+    <div style="font-size:0.8rem; color:#8b949e; margin-bottom:8px;">
+      Bounding Box — WGS-84 (min_lon, min_lat, max_lon, max_lat)
+    </div>
+    <div class="bbox-inputs">
+      <div class="bbox-field">
+        <label>West (min_lon)</label>
+        <input type="number" id="bbox-west"  step="0.0001" value="-0.4197">
+      </div>
+      <div class="bbox-field">
+        <label>East (max_lon)</label>
+        <input type="number" id="bbox-east"  step="0.0001" value="-0.3891">
+      </div>
+      <div class="bbox-field">
+        <label>South (min_lat)</label>
+        <input type="number" id="bbox-south" step="0.0001" value="39.4165">
+      </div>
+      <div class="bbox-field">
+        <label>North (max_lat)</label>
+        <input type="number" id="bbox-north" step="0.0001" value="39.4372">
+      </div>
+    </div>
+    <div class="sat-date-row">
+      <label for="sat-date">Sentinel-1 Date</label>
+      <input type="date" id="sat-date" value="2024-10-30">
+    </div>
+    <button class="btn-sat" onclick="refreshSatellite()">🔄 Refresh Satellite Data</button>
+    <div id="sat-status"></div>
+  </div>
+</div>
+
+<!-- Mission Evolution: Learning Loop History -->
+<div id="mission-panel" class="card" style="display:none">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+    <span style="color:#58a6ff; font-weight:700; letter-spacing:0.5px;">📈 MISSION EVOLUTION</span>
+    <span id="mission-run-badge" style="color:#8b949e; font-size:12px;"></span>
+  </div>
+  <div style="color:#8b949e; font-size:12px; margin-bottom:12px;">AI learning loop performance — survival rate across simulation runs.</div>
+  <div class="mission-grid">
+    <div class="mission-table-wrap">
+      <table class="mission-table">
+        <thead>
+          <tr><th>Run</th><th>Survival %</th><th>Δ</th><th>SOP Change</th></tr>
+        </thead>
+        <tbody id="mission-tbody"></tbody>
+      </table>
+    </div>
+    <div class="mission-chart-wrap">
+      <canvas id="mission-chart"></canvas>
+    </div>
+  </div>
+  <div id="adapt-banner" style="display:none; margin-top:12px; padding:8px 12px; border-radius:6px; background:rgba(63,185,80,0.12); border:1px solid rgba(63,185,80,0.3); color:#3fb950; font-size:13px; font-weight:600;"></div>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+const WS_BASE = API_BASE.replace(/^http/, 'ws');
+
+// ── Agent count sync ─────────────────────────────────────────────────────────
+function syncAgentInput(val) {
+  document.getElementById('agent-number').value = val;
+}
+function syncAgentSlider(val) {
+  const clamped = Math.min(5000, Math.max(1, parseInt(val) || 500));
+  document.getElementById('agent-slider').value = clamped;
+  document.getElementById('agent-number').value = clamped;
+}
+
+// ── Simulation ───────────────────────────────────────────────────────────────
+let ws = null;
+let simCompleted = false;
+let missionHistory = [];
+window._missionChart = null;
+
+function updateMissionHistoryUI() {
+  if (missionHistory.length === 0) return;
+
+  const panel = document.getElementById('mission-panel');
+  panel.style.display = 'block';
+  document.getElementById('mission-run-badge').textContent =
+    `${missionHistory.length} run${missionHistory.length !== 1 ? 's' : ''}`;
+
+  const bestRate = Math.max(...missionHistory.map(r => r.survivalRate));
+
+  const tbody = document.getElementById('mission-tbody');
+  tbody.innerHTML = '';
+  missionHistory.forEach((run, i) => {
+    const prev = i > 0 ? missionHistory[i - 1].survivalRate : null;
+    const delta = prev !== null ? run.survivalRate - prev : null;
+    const deltaHtml = delta === null
+      ? '<span class="delta-neutral">—</span>'
+      : delta > 0.1
+        ? `<span class="delta-up">▲ ${delta.toFixed(1)}</span>`
+        : delta < -0.1
+          ? `<span class="delta-down">▼ ${Math.abs(delta).toFixed(1)}</span>`
+          : '<span class="delta-neutral">≈</span>';
+    const isBest = run.survivalRate === bestRate && missionHistory.length > 1;
+    const row = document.createElement('tr');
+    if (isBest) row.className = 'best-run';
+    row.innerHTML = `
+      <td>${run.runNumber}${isBest ? ' ★' : ''}</td>
+      <td>${run.survivalRate.toFixed(1)}%</td>
+      <td>${deltaHtml}</td>
+      <td class="sop-snippet" title="${run.sopSnippet.replace(/"/g, '&quot;')}">${run.sopSnippet}</td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  if (window._missionChart) { window._missionChart.destroy(); window._missionChart = null; }
+  const ctx = document.getElementById('mission-chart').getContext('2d');
+  const labels = missionHistory.map(r => `Run ${r.runNumber}`);
+  const data = missionHistory.map(r => r.survivalRate);
+  window._missionChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Survival %',
+        data,
+        borderColor: '#3fb950',
+        backgroundColor: 'rgba(63,185,80,0.1)',
+        borderWidth: 2,
+        pointBackgroundColor: data.map(v => v === bestRate && missionHistory.length > 1 ? '#f2cc60' : '#3fb950'),
+        pointRadius: 5,
+        tension: 0.3,
+        fill: true,
+      }]
+    },
+    options: {
+      animation: false, responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => `${c.raw.toFixed(1)}% survival` } }
+      },
+      scales: {
+        y: { min: 0, max: 100, grid: { color: '#21262d' }, ticks: { color: '#8b949e', callback: v => v + '%' } },
+        x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } }
+      }
+    }
+  });
+
+  const banner = document.getElementById('adapt-banner');
+  if (missionHistory.length >= 2) {
+    const improvement = missionHistory[missionHistory.length - 1].survivalRate - missionHistory[0].survivalRate;
+    if (improvement > 0.5) {
+      banner.style.display = 'block';
+      banner.textContent = `✦ System adapting — ${improvement.toFixed(1)}% survival gain since Run 1`;
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+}
+
+function log(msg, cls = '') {
+  const el = document.getElementById('log');
+  const ts = new Date().toLocaleTimeString('en', { hour12: false });
+  el.innerHTML += `<div><span class="ts">[${ts}]</span> <span class="${cls}">${msg}</span></div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function runSimulation() {
+  simCompleted = false;
+
+  const agentCount = parseInt(document.getElementById('agent-number').value) || 500;
+  const wsUrl = `${WS_BASE}/ws/run?scenario=paiporta&agents=${agentCount}`;
+
+  document.getElementById('btn-run').disabled = true;
+  document.getElementById('progress').style.width = '0%';
+  document.getElementById('progress').classList.remove('done');
+  document.getElementById('log').innerHTML = '<div class="header">Initializing connection to ECHO-SWARM core...</div>';
+  document.getElementById('card-telemetry').classList.remove('archived');
+  document.getElementById('card-analysis').classList.remove('archived');
+
+  ['evac-rate', 'stranded', 'clarity', 'diagnosis'].forEach(id => {
+    document.getElementById(id).textContent = '—';
+  });
+
+  const broadcastBox = document.getElementById('broadcast-box');
+  broadcastBox.classList.remove('visible');
+  broadcastBox.style.display = 'none';
+
+  const sopBox = document.getElementById('sop-box');
+  sopBox.classList.remove('visible');
+  sopBox.style.display = 'none';
+
+  // Show loading overlays on both maps, disable playback
+  if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+  document.getElementById('map-overlay-a').classList.remove('hidden');
+  document.getElementById('map-overlay-a').querySelector('span').textContent = 'Simulation in progress...';
+  document.getElementById('map-overlay-b').classList.remove('hidden');
+  document.getElementById('map-overlay-b').querySelector('span').textContent = 'Simulation in progress...';
+  document.getElementById('btn-playback').disabled = true;
+  document.getElementById('btn-playback').textContent = '▶️ Start Mission Playback';
+  document.getElementById('playback-ticker').textContent = '—';
+
+  const dot   = document.getElementById('dot');
+  const label = document.getElementById('status-label');
+  dot.className     = 'status-dot live';
+  label.style.color = '';
+  label.textContent = `Executing Simulation (${agentCount} agents)...`;
+
+  ws = new WebSocket(wsUrl);
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+
+    if (msg.type === 'tick') {
+      const d = msg.data;
+      document.getElementById('tick').textContent         = d.tick;
+      document.getElementById('safe').textContent         = d.n_safe;
+      document.getElementById('evacuating').textContent   = d.n_evacuating;
+      document.getElementById('informed').textContent     = d.n_informed;
+      document.getElementById('preservation').textContent = (d.preservation_rate * 100).toFixed(1) + '%';
+      document.getElementById('progress').style.width     = Math.min(d.tick / 10 * 100, 90) + '%';
+      log(`Tick ${d.tick}: Fleet status updated. Evacuating: ${d.n_evacuating}`, 'tick');
+    }
+
+    else if (msg.type === 'complete') {
+      console.log('[ECHOSWARM] onmessage: type=complete received. simCompleted before set:', simCompleted);
+      const p = msg.data;
+      simCompleted = true;
+      console.log('[ECHOSWARM] onmessage: simCompleted set to true. Keys in payload:', Object.keys(p));
+
+      try {
+        log('✔️ Simulation Cycle Complete. Archiving results...', 'ok');
+        log(`Detected ${p.map.bottleneck_roads.length} major bottlenecks.`, 'err');
+      } catch (e) {
+        console.error('[ECHOSWARM] onmessage: error reading p.map.bottleneck_roads:', e);
+      }
+
+      setTimeout(() => {
+        console.log('[ECHOSWARM] setTimeout fired. simCompleted:', simCompleted);
+        try {
+          // Mission evolution: record this run for learning loop display
+          {
+            const stranded = p.summary.stranded || 0;
+            const survivalRate = (p.summary.safe !== undefined)
+              ? (p.summary.safe / Math.max(1, p.summary.safe + stranded)) * 100
+              : (p.summary.evacuation_rate || 0) * 100;
+            const rawSop = (p.critic && p.critic.sop_update)
+              ? p.critic.sop_update.replace(/[#*`\n\r]/g, ' ').trim()
+              : 'Initial SOP — no changes yet';
+            missionHistory.push({
+              runNumber: missionHistory.length + 1,
+              survivalRate,
+              sopSnippet: rawSop.substring(0, 80) + (rawSop.length > 80 ? '…' : '')
+            });
+            updateMissionHistoryUI();
+          }
+
+          document.getElementById('evac-rate').textContent  = (p.summary.evacuation_rate * 100).toFixed(1) + '%';
+          document.getElementById('stranded').textContent   = p.summary.stranded;
+          document.getElementById('clarity').textContent    = p.hermes.clarity.overall + '/10';
+          document.getElementById('diagnosis').textContent  = p.critic.diagnosis;
+
+          // ── MAP A: Satellite Flood Injection ────────────────────────────────
+          const mapData = p.map || {};
+          if (simLayer) simLayer.clearLayers();
+
+          // Flooded roads: thick red polylines
+          (mapData.flooded_roads || []).forEach(road => {
+            if (!road.coords || road.coords.length < 2) return;
+            L.polyline(road.coords, { color: '#f85149', weight: 5, opacity: 0.85 })
+              .bindTooltip(`Flooded: ${road.name || road.highway || 'road'}`)
+              .addTo(simLayer);
+          });
+
+          // Bottleneck roads: orange dashed polylines with crossing count tooltip
+          (mapData.bottleneck_roads || []).forEach(road => {
+            if (!road.coords || road.coords.length < 2) return;
+            L.polyline(road.coords, { color: '#e3b341', weight: 4, opacity: 0.95, dashArray: '10 6' })
+              .bindTooltip(`Bottleneck #${road.rank}: ${road.name} (${road.crossing_count} crossings)`)
+              .addTo(simLayer);
+          });
+
+          // Shelter on Map A
+          if (mapData.shelter && mapData.shelter.lat) {
+            L.circleMarker([mapData.shelter.lat, mapData.shelter.lon], {
+              radius: 11, color: '#ffffff', fillColor: '#2ea043',
+              fillOpacity: 1, weight: 2.5
+            }).bindTooltip(`Shelter: ${mapData.shelter.name || 'Refuge'}`, { permanent: false })
+              .addTo(simLayer);
+          }
+
+          if (mapData.bounds) {
+            satMap.fitBounds([
+              [mapData.bounds.south, mapData.bounds.west],
+              [mapData.bounds.north, mapData.bounds.east]
+            ], { padding: [20, 20] });
+          }
+          // ── END MAP A ────────────────────────────────────────────────────────
+
+          // ── MAP B: Live Fleet Deployment (final state, pre-playback) ─────────
+          if (fleetSimLayer) fleetSimLayer.clearLayers();
+          (mapData.agents_final || []).forEach(a => {
+            const c = stateColor[a.state] || '#888';
+            L.circleMarker([a.lat, a.lon], {
+              radius: 3.5, color: c, fillColor: c, fillOpacity: 0.75, weight: 0
+            }).addTo(fleetSimLayer);
+          });
+
+          if (mapData.bounds && fleetMap) {
+            fleetMap.fitBounds([
+              [mapData.bounds.south, mapData.bounds.west],
+              [mapData.bounds.north, mapData.bounds.east]
+            ], { padding: [20, 20] });
+          }
+          // ── END MAP B ────────────────────────────────────────────────────────
+
+          // Store replay data and enable playback
+          replayData       = mapData.agent_replay || [];
+          replayFloodRoads = mapData.flooded_roads || [];
+          replayTotalTicks = (p.time_series || []).length;
+          replayTick       = 0;
+          document.getElementById('btn-playback').disabled = (replayData.length === 0);
+          document.getElementById('playback-ticker').textContent =
+            `${replayData.length} agents tracked · ${replayTotalTicks} ticks`;
+
+          // Hide loading overlays
+          document.getElementById('map-overlay-a').classList.add('hidden');
+          document.getElementById('map-overlay-b').classList.add('hidden');
+
+          // ── DECAY CURVE CHART ────────────────────────────────────────────────
+          const tsData = (p.time_series || []).map(t => t.preservation_rate ?? 0);
+          if (tsData.length > 1) {
+            if (window._decayChart) window._decayChart.destroy();
+            window._decayChart = new Chart(document.getElementById('decay-chart'), {
+              type: 'line',
+              data: {
+                labels: tsData.map((_, i) => `T${i}`),
+                datasets: [{
+                  data: tsData,
+                  borderColor: '#1f6feb',
+                  backgroundColor: 'rgba(31,111,235,0.12)',
+                  tension: 0.3, fill: true, pointRadius: 0, borderWidth: 2
+                }]
+              },
+              options: {
+                animation: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                  x: { ticks: { color: '#6e7681', maxTicksLimit: 6, font: { size: 10 } }, grid: { color: '#21262d' } },
+                  y: { min: 0, max: 1, ticks: { color: '#6e7681', font: { size: 10 } }, grid: { color: '#21262d' } }
+                }
+              }
+            });
+          }
+          // ── END DECAY CURVE CHART ────────────────────────────────────────────
+
+          document.getElementById('progress').style.width = '100%';
+          document.getElementById('progress').classList.add('done');
+          document.getElementById('card-telemetry').classList.add('archived');
+          document.getElementById('card-analysis').classList.add('archived');
+
+          const broadcastText = p.hermes.message.human_readable || '(No broadcast generated)';
+          document.getElementById('broadcast-text').textContent = broadcastText;
+          broadcastBox.style.display = 'block';
+          requestAnimationFrame(() => broadcastBox.classList.add('visible'));
+
+          document.getElementById('sop-text').innerHTML = marked.parse(p.critic.sop_update || '');
+          sopBox.style.display = 'block';
+          requestAnimationFrame(() => sopBox.classList.add('visible'));
+
+          log('📦 Final results locked. Data preserved until next launch.', 'info');
+          document.getElementById('btn-run').disabled = false;
+          console.log('[ECHOSWARM] setTimeout: all DOM updates applied successfully.');
+        } catch (e) {
+          console.error('[ECHOSWARM] setTimeout: error applying DOM updates:', e);
+          document.getElementById('btn-run').disabled = false;
+        }
+      }, 500);
+    }
+
+    else if (msg.type === 'error') {
+      log(`Server error: ${msg.message}`, 'err');
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('[ECHOSWARM] onclose fired. simCompleted:', simCompleted);
+    if (simCompleted) {
+      console.log('[ECHOSWARM] onclose: taking SUCCESS path — preserving UI.');
+      dot.className     = 'status-dot done';
+      label.style.color = '#58a6ff';
+      label.textContent = '📦 Simulation Archived';
+    } else {
+      console.warn('[ECHOSWARM] onclose: taking ERROR path — simCompleted was false.');
+      document.getElementById('btn-run').disabled = false;
+      dot.className     = 'status-dot error';
+      label.style.color = '#f85149';
+      label.textContent = 'Connection Closed';
+      log('WebSocket closed before simulation completed.', 'err');
+    }
+  };
+
+  ws.onerror = () => {
+    log('CRITICAL ERROR: Could not establish WebSocket tunnel.', 'err');
+  };
+}
+
+// ── Task 3: Leaflet maps + satellite refresh ─────────────────────────────────
+let satMap = null;
+let drawnItems = null;
+let currentRectLayer = null;
+let simLayer = null;
+
+let fleetMap = null;
+let fleetSimLayer = null;
+
+// Replay state
+let replayData       = null;
+let replayFloodRoads = null;
+let replayTimer      = null;
+let replayTick       = 0;
+let replayTotalTicks = 0;
+
+// Agent state → colour mapping (module-level so playback and complete handler share it)
+const stateColor = {
+  safe:       '#2ea043',
+  evacuating: '#1f6feb',
+  informed:   '#e3b341',
+  stranded:   '#f85149',
+  waiting:    '#6e7681',
+};
+
+function initSatMap() {
+  // Paiporta centre
+  satMap = L.map('sat-map').setView([39.428, -0.4037], 13);
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    maxZoom: 19,
+  }).addTo(satMap);
+
+  drawnItems = new L.FeatureGroup().addTo(satMap);
+  simLayer = L.layerGroup().addTo(satMap);
+
+  const drawControl = new L.Control.Draw({
+    draw: {
+      polygon:   false,
+      polyline:  false,
+      circle:    false,
+      circlemarker: false,
+      marker:    false,
+      rectangle: { shapeOptions: { color: '#388bfd', weight: 2, fillOpacity: 0.1 } },
+    },
+    edit: { featureGroup: drawnItems },
+  });
+  satMap.addControl(drawControl);
+
+  // Draw the default bbox as a reference rectangle
+  drawDefaultBbox();
+
+  satMap.on(L.Draw.Event.CREATED, (e) => {
+    drawnItems.clearLayers();
+    drawnItems.addLayer(e.layer);
+    currentRectLayer = e.layer;
+    const b = e.layer.getBounds();
+    document.getElementById('bbox-west').value  = b.getWest().toFixed(4);
+    document.getElementById('bbox-east').value  = b.getEast().toFixed(4);
+    document.getElementById('bbox-south').value = b.getSouth().toFixed(4);
+    document.getElementById('bbox-north').value = b.getNorth().toFixed(4);
+  });
+
+  satMap.on(L.Draw.Event.EDITED, (e) => {
+    e.layers.eachLayer((layer) => {
+      const b = layer.getBounds();
+      document.getElementById('bbox-west').value  = b.getWest().toFixed(4);
+      document.getElementById('bbox-east').value  = b.getEast().toFixed(4);
+      document.getElementById('bbox-south').value = b.getSouth().toFixed(4);
+      document.getElementById('bbox-north').value = b.getNorth().toFixed(4);
+    });
+  });
+
+  satMap.on(L.Draw.Event.DELETED, () => {
+    currentRectLayer = null;
+    drawDefaultBbox();
+  });
+
+  // Map A legend
+  const satLegend = L.control({ position: 'bottomright' });
+  satLegend.onAdd = function() {
+    const div = L.DomUtil.create('div');
+    div.style.cssText = 'background:#161b22cc;border:1px solid #30363d;border-radius:6px;padding:8px 10px;font-size:11px;color:#e6edf3;line-height:1.9;backdrop-filter:blur(4px);pointer-events:none;';
+    div.innerHTML =
+      '<div style="font-weight:700;color:#8b949e;letter-spacing:.5px;margin-bottom:3px;">SATELLITE</div>' +
+      '<div><span style="display:inline-block;width:20px;height:4px;background:#f85149;border-radius:2px;vertical-align:middle;margin-right:6px;"></span>Flooded Road</div>' +
+      '<div><span style="display:inline-block;width:20px;height:0;border-top:3px dashed #d29922;vertical-align:middle;margin-right:6px;"></span>Bottleneck</div>' +
+      '<div><span style="display:inline-block;width:10px;height:10px;background:#3fb950;border-radius:50%;vertical-align:middle;margin-right:6px;"></span>Shelter</div>';
+    return div;
+  };
+  satLegend.addTo(satMap);
+}
+
+function drawDefaultBbox() {
+  // Default bbox from config: west=-0.4197, south=39.4165, east=-0.3891, north=39.4372
+  const bounds = L.latLngBounds(
+    L.latLng(39.4165, -0.4197),
+    L.latLng(39.4372, -0.3891)
+  );
+  const rect = L.rectangle(bounds, { color: '#484f58', weight: 1, dashArray: '4', fillOpacity: 0.05 });
+  rect.addTo(satMap);
+}
+
+function initFleetMap() {
+  fleetMap = L.map('fleet-map').setView([39.428, -0.4037], 13);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    maxZoom: 19,
+  }).addTo(fleetMap);
+  fleetSimLayer = L.layerGroup().addTo(fleetMap);
+
+  // Map B legend
+  const fleetLegend = L.control({ position: 'bottomright' });
+  fleetLegend.onAdd = function() {
+    const div = L.DomUtil.create('div');
+    div.style.cssText = 'background:#161b22cc;border:1px solid #30363d;border-radius:6px;padding:8px 10px;font-size:11px;color:#e6edf3;line-height:1.9;backdrop-filter:blur(4px);pointer-events:none;';
+    div.innerHTML =
+      '<div style="font-weight:700;color:#8b949e;letter-spacing:.5px;margin-bottom:3px;">FLEET</div>' +
+      '<div><span style="display:inline-block;width:10px;height:10px;background:#2ea043;border-radius:50%;vertical-align:middle;margin-right:6px;"></span>Safe</div>' +
+      '<div><span style="display:inline-block;width:10px;height:10px;background:#1f6feb;border-radius:50%;vertical-align:middle;margin-right:6px;"></span>Evacuating</div>' +
+      '<div><span style="display:inline-block;width:10px;height:10px;background:#e3b341;border-radius:50%;vertical-align:middle;margin-right:6px;"></span>Informed (Evaluating)</div>' +
+      '<div><span style="display:inline-block;width:10px;height:10px;background:#f85149;border-radius:50%;vertical-align:middle;margin-right:6px;"></span>Stranded</div>' +
+      '<div><span style="display:inline-block;width:10px;height:10px;background:#6e7681;border-radius:50%;vertical-align:middle;margin-right:6px;"></span>Uninformed (Waiting)</div>';
+    return div;
+  };
+  fleetLegend.addTo(fleetMap);
+}
+
+function startPlayback() {
+  if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+
+  const btn = document.getElementById('btn-playback');
+  btn.textContent = '⏹ Stop Playback';
+  btn.onclick = stopPlayback;
+
+  // Map A: staggered flood road reveal (60ms per road — visual storytelling of Sentinel-1 data)
+  if (simLayer) simLayer.clearLayers();
+  (replayFloodRoads || []).forEach((road, i) => {
+    if (!road.coords || road.coords.length < 2) return;
+    setTimeout(() => {
+      L.polyline(road.coords, { color: '#f85149', weight: 5, opacity: 0.85 })
+        .bindTooltip(`Flooded: ${road.name || road.highway || 'road'}`)
+        .addTo(simLayer);
+    }, i * 60);
+  });
+
+  replayTick = 0;
+  replayTimer = setInterval(() => {
+    if (replayTick >= replayTotalTicks) {
+      stopPlayback();
+      return;
+    }
+
+    // Map B: update 200 sampled agent positions for this tick
+    if (fleetSimLayer) fleetSimLayer.clearLayers();
+    (replayData || []).forEach(agent => {
+      const frame = agent.history[replayTick];
+      if (!frame) return;
+      const [lat, lon, state] = frame;
+      const c = stateColor[state] || '#888';
+      L.circleMarker([lat, lon], {
+        radius: 4, color: c, fillColor: c, fillOpacity: 0.8, weight: 0
+      }).addTo(fleetSimLayer);
+    });
+
+    document.getElementById('playback-ticker').textContent =
+      `Tick ${replayTick + 1} / ${replayTotalTicks}`;
+    replayTick++;
+  }, 300);
+}
+
+function stopPlayback() {
+  if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+  const btn = document.getElementById('btn-playback');
+  btn.textContent = '▶️ Start Mission Playback';
+  btn.onclick = startPlayback;
+}
+
+async function refreshSatellite() {
+  const west  = parseFloat(document.getElementById('bbox-west').value);
+  const east  = parseFloat(document.getElementById('bbox-east').value);
+  const south = parseFloat(document.getElementById('bbox-south').value);
+  const north = parseFloat(document.getElementById('bbox-north').value);
+  const date  = document.getElementById('sat-date').value;
+
+  if ([west, east, south, north].some(isNaN)) {
+    showSatStatus('error', '❌ Invalid bounding box coordinates.');
+    return;
+  }
+
+  const btn = document.querySelector('.btn-sat');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Rebuilding map...';
+  showSatStatus('', '⏳ Fetching OSM road network + Sentinel-1 flood mask...');
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/refresh_map`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        date,
+        flood_event_id: 'dynamic_refresh',
+        threshold_db: -18.0,
+        bbox: [west, south, east, north],
+      }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const d = await resp.json();
+    const cls = d.status === 'live' ? 'live' : 'fallback';
+    const g = d.graph || {};
+    showSatStatus(cls,
+      `${d.status === 'live' ? '🛰 LIVE' : '⚠ FALLBACK'} · ` +
+      `Graph: ${g.intersections ?? '?'} nodes, ${g.edges ?? '?'} edges · ` +
+      `Polygons: ${d.polygons_detected} · Edges blocked: ${d.edges_blocked}`
+    );
+    // Re-centre both maps on the new bbox so the next simulation lands correctly
+    const newBounds = L.latLngBounds(L.latLng(south, west), L.latLng(north, east));
+    if (satMap)   satMap.fitBounds(newBounds);
+    if (fleetMap) fleetMap.fitBounds(newBounds);
+  } catch (err) {
+    showSatStatus('error', `❌ ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function showSatStatus(cls, text) {
+  const el = document.getElementById('sat-status');
+  el.className = cls;
+  el.textContent = text;
+  el.style.display = 'block';
+}
+
+// ── Knowledge Graph Topology ─────────────────────────────────────────────────
+let _topoNetwork = null;
+
+async function openTopologyModal() {
+  const modal = document.getElementById('topology-modal');
+  modal.classList.add('open');
+  document.getElementById('topology-loading').style.display = 'flex';
+  document.getElementById('topology-stats-badge').textContent = 'Querying Neo4j…';
+  if (_topoNetwork) { _topoNetwork.destroy(); _topoNetwork = null; }
+
+  // Escape key to close
+  document._topoKeyHandler = (e) => { if (e.key === 'Escape') closeTopologyModal(); };
+  document.addEventListener('keydown', document._topoKeyHandler);
+
+  let data;
+  try {
+    const resp = await fetch(`${API_BASE}/api/topology`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    data = await resp.json();
+  } catch (err) {
+    document.getElementById('topology-stats-badge').textContent = `❌ ${err.message}`;
+    document.getElementById('topology-loading').style.display = 'none';
+    return;
+  }
+
+  const { nodes: rawNodes, links, stats } = data;
+  const pct = stats.total_edges > 0
+    ? ((stats.flooded_edges / stats.total_edges) * 100).toFixed(1)
+    : '0.0';
+  document.getElementById('topology-stats-badge').textContent =
+    `${stats.total_nodes} nodes · ${stats.total_edges} edges · ` +
+    `${stats.flooded_edges} flooded (${pct}%)`;
+
+  // Compute per-node degree and flood exposure
+  const degree = {};
+  const floodedNodes = new Set();
+  links.forEach(l => {
+    degree[l.source] = (degree[l.source] || 0) + 1;
+    degree[l.target] = (degree[l.target] || 0) + 1;
+    if (!l.passable) { floodedNodes.add(l.source); floodedNodes.add(l.target); }
+  });
+
+  const visNodes = new vis.DataSet(rawNodes.map(n => {
+    const flooded = floodedNodes.has(n.id);
+    const deg = degree[n.id] || 1;
+    return {
+      id: n.id,
+      size: 3 + Math.min(deg, 12) * 0.85,
+      color: {
+        background: flooded ? '#da3633' : '#1f6feb',
+        border:     flooded ? '#f85149' : '#388bfd',
+        highlight:  { background: '#58a6ff', border: '#79c0ff' },
+        hover:      { background: '#58a6ff', border: '#79c0ff' },
+      },
+      title: `<div style="background:#161b22;border:1px solid #30363d;border-radius:4px;` +
+             `padding:6px 10px;font-size:12px;color:#e6edf3;line-height:1.6;">` +
+             `<b style="color:${flooded ? '#f85149' : '#58a6ff'}">` +
+             `${flooded ? '⚠ Flood-affected' : '✓ Passable'}</b><br>` +
+             `Sector: ${n.sector || '—'}<br>` +
+             `Lat: ${(n.lat || 0).toFixed(5)} · Lon: ${(n.lon || 0).toFixed(5)}<br>` +
+             `Connections: ${deg}</div>`,
+    };
+  }));
+
+  const visEdges = new vis.DataSet(links.map((l, i) => ({
+    id: i,
+    from: l.source,
+    to: l.target,
+    color: {
+      color:     l.passable ? 'rgba(56,139,253,0.35)' : 'rgba(248,81,73,0.75)',
+      highlight: l.passable ? '#58a6ff'               : '#ff7b6b',
+      hover:     l.passable ? '#58a6ff'               : '#ff7b6b',
+    },
+    width:    l.passable ? 1 : 2,
+    title:    l.road_name || (l.passable ? 'Open road' : '⚠ Flooded road'),
+  })));
+
+  const container = document.getElementById('topology-canvas');
+  _topoNetwork = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
+    nodes: {
+      shape: 'dot', borderWidth: 1, borderWidthSelected: 2,
+      font: { size: 0 }, scaling: { min: 3, max: 18 },
+    },
+    edges: {
+      arrows: { to: { enabled: false } },
+      hoverWidth: 1.5,
+      smooth: { enabled: false },  // straight lines — dramatically faster for 1000+ edges
+    },
+    physics: {
+      stabilization: { enabled: true, iterations: 150, updateInterval: 50, fit: true },
+      barnesHut: {
+        gravitationalConstant: -4000, centralGravity: 0.4,
+        springLength: 50, springConstant: 0.05, damping: 0.12,
+      },
+      maxVelocity: 80, minVelocity: 2,
+    },
+    interaction: { hover: true, tooltipDelay: 120, hideEdgesOnDrag: true, hideNodesOnDrag: false },
+    configure: { enabled: false },
+  });
+
+  _topoNetwork.once('stabilizationIterationsDone', () => {
+    // Freeze layout so the browser stops computing physics every frame
+    _topoNetwork.setOptions({ physics: { enabled: false } });
+    document.getElementById('topology-loading').style.display = 'none';
+    _topoNetwork.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+  });
+}
+
+function closeTopologyModal() {
+  document.getElementById('topology-modal').classList.remove('open');
+  if (document._topoKeyHandler) {
+    document.removeEventListener('keydown', document._topoKeyHandler);
+    document._topoKeyHandler = null;
+  }
+}
+
+// Allow manual coordinate edits to clear the drawn layer so there's no mismatch
+['bbox-west','bbox-east','bbox-south','bbox-north'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    if (currentRectLayer) {
+      drawnItems.removeLayer(currentRectLayer);
+      currentRectLayer = null;
+    }
+  });
+});
+
+// Init both maps after DOM is ready
+window.addEventListener('load', () => { initSatMap(); initFleetMap(); });
+</script>
+</body>
+</html>

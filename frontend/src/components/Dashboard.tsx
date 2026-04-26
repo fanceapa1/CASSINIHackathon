@@ -27,6 +27,7 @@ import { getAllCountryAdminRegions } from "../data/adminBoundaries";
 import { floodZones, historicalSimulations, informRiskDataSource } from "../data/floodMockData";
 import { DraggableWindow } from "./DraggableWindow";
 import { RiskMap } from "./RiskMap";
+import { SwarmModeModal } from "./SwarmModeModal";
 import type {
   FloodZone,
   FloodZoneWithRisk,
@@ -224,6 +225,7 @@ export default function Dashboard() {
   const [simulationState, setSimulationState] = useState<SimulationRunState>("idle");
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [swarmOpen, setSwarmOpen] = useState(false);
 
   const [officialRegionsByCountry, setOfficialRegionsByCountry] = useState<
     Record<string, ZoneRegion[]>
@@ -807,17 +809,8 @@ export default function Dashboard() {
       return;
     }
 
-    if (!isPremium) {
-      showToast("Upgrade required");
-      return;
-    }
-
-    openWindow("create");
-    setActiveScenarioId("live");
-    setGeneratedSimulation(null);
-    setSimulationState("running");
-    setLoadingStepIndex(0);
-  }, [openWindow, selectedZoneId, showToast]);
+    setSwarmOpen(true);
+  }, [selectedZoneId, showToast]);
 
   const rerunSimulation = useCallback(() => {
     if (!selectedZoneId) {
@@ -1223,20 +1216,15 @@ export default function Dashboard() {
                 <button
                   type="button"
                   onClick={handleCreateSimulationClick}
-                  className="flex w-full items-center justify-between rounded-lg bg-violet-500/20 px-3 py-2 text-sm font-medium text-violet-100 transition hover:bg-violet-500/35"
+                  className="flex w-full items-center justify-between rounded-lg border border-cyan-500/30 bg-cyan-500/12 px-3 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20"
                 >
                   <span className="inline-flex items-center gap-2">
                     <Sparkles className="h-4 w-4" />
                     Create simulation
                   </span>
-                  {isPremium ? (
-                    <span className="text-xs text-violet-200/75">Unlocked</span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-xs text-violet-200">
-                      <Lock className="h-3 w-3" />
-                      Premium
-                    </span>
-                  )}
+                  <span className="text-xs uppercase tracking-[0.16em] text-cyan-200/80">
+                    EchoSwarm
+                  </span>
                 </button>
               </div>
             </motion.div>
@@ -1422,6 +1410,11 @@ export default function Dashboard() {
             </motion.div>
           ) : null}
         </AnimatePresence>
+
+        <SwarmModeModal
+          isOpen={swarmOpen}
+          onClose={() => setSwarmOpen(false)}
+        />
       </div>
     </div>
   );

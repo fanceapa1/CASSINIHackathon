@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "echoswarm-core"
+version = "0.1.0"
+description = "AI-powered flood evacuation routing and population-response simulation"
+requires-python = ">=3.11"
+dependencies = [
+    # Graph database
+    "neo4j>=5.19.0",
+    # OSM / Overpass
+    "overpy>=0.7.0",
+    "requests>=2.32.0",
+    # Geometry — flood polygon intersection, waterway adjacency
+    "shapely>=2.0.6",
+    "pyproj>=3.6.1",
+    # Hermes engine (Phase 3) — Groq default, Anthropic production swap
+    "groq>=0.9.0",
+    "anthropic>=0.40.0",
+    # Data validation across all components
+    "pydantic>=2.7.0",
+    # CLI
+    "click>=8.1.7",
+    # Config / secrets
+    "python-dotenv>=1.0.1",
+    # Logging
+    "loguru>=0.7.2",
+    # Numerical (MiroFish decay curves, agent positions)
+    "numpy>=1.26.4",
+    # PNG parsing for SAR flood mask (Phase 2 satellite pipeline — avoids GDAL)
+    "Pillow>=10.0.0",
+    # In-memory spatial graph for MiroFish (synced from Neo4j per simulation run)
+    "networkx>=3.3",
+    # Terminal output during demo
+    "rich>=13.7.1",
+    # API bridge (Phase 6)
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=12.0",
+]
+
+[project.scripts]
+echoswarm = "echoswarm.cli:main"
+
+[tool.hatch.build.targets.wheel]
+# src/ is the package root: `from graph.loader import load_graph` etc.
+packages = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.6.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

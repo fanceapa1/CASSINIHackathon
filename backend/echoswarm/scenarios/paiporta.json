@@ -1,0 +1,11 @@
+{
+  "name": "paiporta",
+  "city": "Paiporta",
+  "sector": "Paiporta",
+  "bbox": [39.4144, -0.4224, 39.4417, -0.3849],
+  "flood_data_path": "data/valencia_flood_peak.json",
+  "flood_event_id": "flood_paiporta_20241029_001",
+  "shelter_name": "Centre Cultural Recreatiu",
+  "shelter_coords": [39.4221552, -0.3905174],
+  "n_agents": 500
+}
