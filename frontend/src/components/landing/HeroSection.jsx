@@ -26,33 +26,31 @@ const HeroSection = ({ onContactAction }) => {
           className="space-y-8"
         >
           <p className="font-body text-sm font-semibold uppercase tracking-[0.2em] text-cyan-100/75">
-            Incident Intelligence Platform
+            EU Flood Risk Dashboard
           </p>
           <ScrambleTitle
             as="h1"
-            text="Synoptis - Platforma Impotriva Dezastrelor"
+            text="ECHO-SWARM - Flood Intelligence Platform"
             delay={650}
             once={true}
             className="font-heading text-4xl font-bold uppercase leading-[1.05] text-white sm:text-5xl lg:text-6xl"
           />
           <p className="max-w-xl font-body text-base leading-relaxed text-slate-300 sm:text-lg">
-            Monitorizare live, coordonare pe echipe si raspuns rapid intr-un singur tablou de control.
-            Synoptis conecteaza datele operationale cu decizii clare, atunci cand fiecare secunda
-            conteaza.
+            Live flood monitoring, swarm-based evacuation simulations, and real-time EU risk assessment in a single dashboard. ECHO-SWARM bridges Copernicus satellite data with actionable decisions when every second counts.
           </p>
           <div className="flex flex-wrap gap-4">
             <Link
               to="/dashboard"
               className="rounded-full bg-cyan-300 px-7 py-3 font-body text-sm font-bold uppercase tracking-[0.08em] text-slate-950 transition hover:bg-cyan-200 sm:text-base"
             >
-              Descopera Platforma
+              Explore Dashboard
             </Link>
             <button
               type="button"
               onClick={onContactAction}
               className="rounded-full border border-cyan-100/35 bg-white/5 px-7 py-3 font-body text-sm font-semibold text-slate-100 transition hover:bg-white/10 sm:text-base"
             >
-              Vorbeste Cu Echipa
+              Contact the Team
             </button>
           </div>
         </motion.div>
