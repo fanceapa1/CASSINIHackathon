@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
-  CheckCircle,
   ChevronDown,
   Crown,
   Globe2,
@@ -24,7 +23,17 @@ import {
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { getAllCountryAdminRegions } from "../data/adminBoundaries";
-import { floodZones, historicalSimulations, informRiskDataSource } from "../data/floodMockData";
+import {
+  floodZones,
+  historicalSimulations,
+  informFloodScores2026ByIso2,
+  informRiskDataSource,
+} from "../data/floodMockData";
+import {
+  eurostatPopulationSource,
+  fetchLatestEurostatCountryPopulations,
+  type EurostatCountryPopulation,
+} from "../data/eurostatPopulation";
 import { DraggableWindow } from "./DraggableWindow";
 import { RiskMap } from "./RiskMap";
 import { SwarmModeModal } from "./SwarmModeModal";
@@ -41,7 +50,34 @@ import type {
 type WindowKey = "past" | "create";
 type SimulationRunState = "idle" | "running" | "complete";
 
+interface FloodSummary {
+  status: "live" | "fallback" | "unavailable";
+  source: string | null;
+  scene_date: string | null;
+  observed_flood_area_km2: number | null;
+  polygons_detected: number | null;
+  message: string;
+}
+
+interface OfficialCountryFeature {
+  type: "Feature";
+  properties: {
+    CNTR_ID: string;
+  };
+  geometry: {
+    type: "Polygon" | "MultiPolygon";
+    coordinates: unknown;
+  };
+}
+
+interface OfficialCountryCollection {
+  type: "FeatureCollection";
+  features: OfficialCountryFeature[];
+}
+
 const SIDEBAR_WIDTH = 356;
+const ECHOSWARM_API_URL =
+  import.meta.env.VITE_ECHOSWARM_API_URL ?? "http://localhost:8000";
 
 const loadingMessages = [
   "Extracting satellite data...",
@@ -53,19 +89,77 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function roundToOneDecimal(value: number): number {
-  return Math.round(value * 10) / 10;
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
-function formatNumber(value: number): string {
+function formatNumber(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) {
+    return "-";
+  }
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-function formatCurrencyMillions(value: number): string {
+function formatUnit(value: number | null | undefined, unit: string): string {
+  if (!isFiniteNumber(value)) {
+    return "-";
+  }
+  return `${formatNumber(value)} ${unit}`;
+}
+
+function formatCurrencyMillions(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) {
+    return "-";
+  }
   return `EUR ${new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 1,
     minimumFractionDigits: 1,
   }).format(value)}M`;
+}
+
+function formatMeters(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) {
+    return "-";
+  }
+  return `${value.toFixed(1)} m`;
+}
+
+function formatCubicMeters(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) {
+    return "-";
+  }
+  return `${formatNumber(value)} m3`;
+}
+
+function formatSquareKilometers(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) {
+    return "-";
+  }
+  return `${new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  }).format(value)} km2`;
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) {
+    return "-";
+  }
+  return `${value}%`;
+}
+
+function formatScore(value: number | null | undefined, maximum: number): string {
+  if (!isFiniteNumber(value)) {
+    return "-";
+  }
+  return `${value.toFixed(1)} / ${maximum}`;
+}
+
+function formatScore100(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) {
+    return "-";
+  }
+  return `${Math.round(value)} / 100`;
 }
 
 function formatIncidentDate(value: string): string {
@@ -86,15 +180,6 @@ function getRiskChipClasses(riskLevel: number): string {
   return "bg-rose-500/30 text-rose-100";
 }
 
-function getStringHash(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(index);
-    hash |= 0;
-  }
-  return Math.abs(hash);
-}
-
 function getRepresentativePolygon(region: ZoneRegion): LngLat[] {
   if (region.geometry?.type === "Polygon") {
     return region.geometry.coordinates[0] ?? region.polygon;
@@ -105,99 +190,66 @@ function getRepresentativePolygon(region: ZoneRegion): LngLat[] {
   return region.polygon;
 }
 
-function geometryAreaProxy(region: ZoneRegion): number {
-  const polygon = getRepresentativePolygon(region);
-  if (polygon.length < 3) {
-    return 1;
+function collectCoordinatePoints(value: unknown, points: LngLat[]): void {
+  if (!Array.isArray(value)) {
+    return;
   }
 
-  let minLon = polygon[0][0];
-  let maxLon = polygon[0][0];
-  let minLat = polygon[0][1];
-  let maxLat = polygon[0][1];
+  if (
+    value.length >= 2 &&
+    typeof value[0] === "number" &&
+    typeof value[1] === "number" &&
+    Number.isFinite(value[0]) &&
+    Number.isFinite(value[1])
+  ) {
+    points.push([value[0], value[1]]);
+    return;
+  }
 
-  polygon.forEach(([lon, lat]) => {
+  value.forEach((item) => collectCoordinatePoints(item, points));
+}
+
+function getGeometryBounds(
+  geometry: { coordinates: unknown } | undefined | null,
+): [number, number, number, number] | null {
+  if (!geometry) {
+    return null;
+  }
+
+  const points: LngLat[] = [];
+  collectCoordinatePoints(geometry.coordinates, points);
+  if (points.length === 0) {
+    return null;
+  }
+
+  let minLon = points[0][0];
+  let maxLon = points[0][0];
+  let minLat = points[0][1];
+  let maxLat = points[0][1];
+
+  points.forEach(([lon, lat]) => {
     minLon = Math.min(minLon, lon);
     maxLon = Math.max(maxLon, lon);
     minLat = Math.min(minLat, lat);
     maxLat = Math.max(maxLat, lat);
   });
 
-  return Math.max((maxLon - minLon) * (maxLat - minLat), 0.0004);
-}
-
-function buildRegionalHistory(regionName: string, regionId: string, baselineRisk: number, estimatedLoss: number) {
-  const hash = getStringHash(regionId);
-  const firstEventYear = 2003 + (hash % 11);
-  const secondEventYear = 2015 + (hash % 9);
-
-  const firstEventLoss = roundToOneDecimal(estimatedLoss * (0.72 + baselineRisk / 200));
-  const secondEventLoss = roundToOneDecimal(estimatedLoss * (0.58 + baselineRisk / 210));
-
-  return [
-    {
-      id: `${regionId}-hist-1`,
-      title: `${regionName} river flood`,
-      eventDate: `${firstEventYear}-05-14`,
-      estimatedLossEurMillions: firstEventLoss,
-      peakWaterLevelM: roundToOneDecimal(1.2 + baselineRisk * 0.028),
-      summary: "Recorded high river discharge and floodplain overflow across administrative settlements.",
-    },
-    {
-      id: `${regionId}-hist-2`,
-      title: `${regionName} flash flooding`,
-      eventDate: `${secondEventYear}-09-22`,
-      estimatedLossEurMillions: secondEventLoss,
-      peakWaterLevelM: roundToOneDecimal(0.9 + baselineRisk * 0.025),
-      summary: "Short-duration high-intensity precipitation impacted urban and peri-urban drainage basins.",
-    },
-  ];
+  return [minLon, minLat, maxLon, maxLat];
 }
 
 function buildRegionsFromOfficialBoundaries(zone: FloodZone, candidateRegions: ZoneRegion[]): ZoneRegion[] {
-  const areaWeights = candidateRegions.map((region) => geometryAreaProxy(region));
-  const totalAreaWeight = areaWeights.reduce((sum, value) => sum + value, 0);
-  const safeTotalWeight = totalAreaWeight <= 0 ? 1 : totalAreaWeight;
-
-  return candidateRegions.map((region, index) => {
-    const weight = areaWeights[index] / safeTotalWeight;
-    const hash = getStringHash(`${zone.countryCode}-${region.name}`);
-    const riskShift = (hash % 15) - 7;
-    const baselineRiskLevel = clamp(Math.round(zone.baselineRiskLevel + riskShift), 8, 100);
-    const population = Math.max(1200, Math.round(zone.stats.populationAtRisk * weight));
-    const estimatedLossEurMillions = roundToOneDecimal(
-      zone.stats.estimatedHistoricalLossEurMillions * weight * (0.78 + baselineRiskLevel / 190),
-    );
-    return {
+  return candidateRegions.map((region) => ({
       id: region.id,
       name: region.name,
       countryCode: zone.countryCode,
       center: region.center,
       polygon: getRepresentativePolygon(region),
       geometry: region.geometry,
-      population,
-      baselineRiskLevel,
-      estimatedLossEurMillions,
-      historicalEvents: buildRegionalHistory(
-        region.name,
-        region.id,
-        baselineRiskLevel,
-        estimatedLossEurMillions,
-      ),
-    };
-  });
-}
-
-function deriveHistoricalRegionRisk(
-  zoneRisk: number | undefined,
-  region: ZoneRegion,
-): number | undefined {
-  if (zoneRisk === undefined) {
-    return undefined;
-  }
-  const hash = getStringHash(region.id);
-  const spread = (hash % 11) - 5;
-  return clamp(Math.round(zoneRisk + spread), 8, 100);
+      population: null,
+      baselineRiskLevel: zone.baselineRiskLevel,
+      estimatedLossEurMillions: null,
+      historicalEvents: [],
+  }));
 }
 
 export default function Dashboard() {
@@ -217,6 +269,14 @@ export default function Dashboard() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [contextMenuVisible, setContextMenuVisible] = useState(true);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [floodSummary, setFloodSummary] = useState<FloodSummary | null>(null);
+  const [countryBoundsByCode, setCountryBoundsByCode] = useState<
+    Record<string, [number, number, number, number]>
+  >({});
+  const [countryPopulations, setCountryPopulations] = useState<
+    Record<string, EurostatCountryPopulation>
+  >({});
+  const [countryPopulationsLoading, setCountryPopulationsLoading] = useState(true);
   const [openWindows, setOpenWindows] = useState<Record<WindowKey, boolean>>({
     past: false,
     create: false,
@@ -239,17 +299,15 @@ export default function Dashboard() {
       const createdAt = new Date().toISOString();
       const riskByZone: Record<string, number> = {};
       const riskByRegion: Record<string, number> = {};
-      const projectedLossByZoneEurMillions: Record<string, number> = {};
-      const projectedLossByRegionEurMillions: Record<string, number> = {};
-      const avoidedLossByZoneEurMillions: Record<string, number> = {};
-      const avoidedLossByRegionEurMillions: Record<string, number> = {};
-      const savingsPctByZone: Record<string, number> = {};
-      const savingsPctByRegion: Record<string, number> = {};
+      const projectedLossByZoneEurMillions: Record<string, null> = {};
+      const projectedLossByRegionEurMillions: Record<string, null> = {};
+      const avoidedLossByZoneEurMillions: Record<string, null> = {};
+      const avoidedLossByRegionEurMillions: Record<string, null> = {};
+      const savingsPctByZone: Record<string, null> = {};
+      const savingsPctByRegion: Record<string, null> = {};
 
       floodZones.forEach((zone, zoneIndex) => {
         let zoneRiskAccumulator = 0;
-        let zoneProjectedLoss = 0;
-        let zoneAvoidedLoss = 0;
         const officialRegions = officialRegionsByCountry[zone.countryCode];
         const regionsForZone =
           officialRegions && officialRegions.length > 0 ? officialRegions : zone.regions;
@@ -264,48 +322,24 @@ export default function Dashboard() {
             100,
           );
           riskByRegion[region.id] = regionalRisk;
-
-          const projectedRegionalLoss = roundToOneDecimal(
-            region.estimatedLossEurMillions * (0.62 + regionalRisk / 140),
-          );
-          const regionalSavingsPct = clamp(
-            20 + Math.round(regionalRisk * 0.21) + (region.id === focusRegionId ? 6 : 0),
-            18,
-            60,
-          );
-          const avoidedRegionalLoss = roundToOneDecimal(
-            projectedRegionalLoss * (regionalSavingsPct / 100),
-          );
-
-          projectedLossByRegionEurMillions[region.id] = projectedRegionalLoss;
-          savingsPctByRegion[region.id] = regionalSavingsPct;
-          avoidedLossByRegionEurMillions[region.id] = avoidedRegionalLoss;
-
+          projectedLossByRegionEurMillions[region.id] = null;
+          avoidedLossByRegionEurMillions[region.id] = null;
+          savingsPctByRegion[region.id] = null;
           zoneRiskAccumulator += regionalRisk;
-          zoneProjectedLoss += projectedRegionalLoss;
-          zoneAvoidedLoss += avoidedRegionalLoss;
         });
 
         const derivedZoneRisk = clamp(
-          Math.round(zoneRiskAccumulator / Math.max(regionsForZone.length, 1)),
+          regionsForZone.length > 0
+            ? Math.round(zoneRiskAccumulator / regionsForZone.length)
+            : zone.baselineRiskLevel,
           0,
           100,
         );
         riskByZone[zone.id] = derivedZoneRisk;
-        projectedLossByZoneEurMillions[zone.id] = roundToOneDecimal(zoneProjectedLoss);
-        avoidedLossByZoneEurMillions[zone.id] = roundToOneDecimal(zoneAvoidedLoss);
-        savingsPctByZone[zone.id] =
-          zoneProjectedLoss > 0
-            ? clamp(Math.round((zoneAvoidedLoss / zoneProjectedLoss) * 100), 0, 100)
-            : zone.stats.estimatedPlanSavingsPct;
+        projectedLossByZoneEurMillions[zone.id] = null;
+        avoidedLossByZoneEurMillions[zone.id] = null;
+        savingsPctByZone[zone.id] = null;
       });
-
-      const estimatedDisplacement = Math.round(
-        floodZones.reduce((sum, zone) => {
-          const risk = riskByZone[zone.id] ?? zone.baselineRiskLevel;
-          return sum + zone.stats.populationAtRisk * (risk / 100) * 0.2;
-        }, 0),
-      );
 
       return {
         id: "generated",
@@ -319,8 +353,8 @@ export default function Dashboard() {
         avoidedLossByRegionEurMillions,
         savingsPctByZone,
         savingsPctByRegion,
-        estimatedDisplacement,
-        responseTimeMinutes: 47,
+        estimatedDisplacement: null,
+        responseTimeMinutes: null,
       };
     },
     [officialRegionsByCountry],
@@ -356,9 +390,6 @@ export default function Dashboard() {
   );
 
   const regionsWithRisk = useMemo<ZoneRegionWithRisk[]>(() => {
-    const selectedHistorical = historicalSimulations.find(
-      (simulation) => simulation.id === activeScenarioId,
-    );
     const generatedRiskByRegion =
       activeScenarioId === "generated" ? generatedSimulation?.riskByRegion : undefined;
 
@@ -368,12 +399,8 @@ export default function Dashboard() {
         ? officialRegionsByCountry[zone.countryCode]
         : zone.regions
       ).map((region) => {
-        const historicalRisk = selectedHistorical?.riskByRegion[region.id];
-        const zoneHistoricalRisk = selectedHistorical?.riskByZone[zone.id];
-        const derivedHistoricalRisk = deriveHistoricalRegionRisk(zoneHistoricalRisk, region);
         const generatedRisk = generatedRiskByRegion?.[region.id];
-        const riskLevel =
-          generatedRisk ?? historicalRisk ?? derivedHistoricalRisk ?? region.baselineRiskLevel;
+        const riskLevel = generatedRisk ?? region.baselineRiskLevel;
         return {
           ...region,
           riskLevel: clamp(riskLevel, 0, 100),
@@ -417,6 +444,73 @@ export default function Dashboard() {
     ? Boolean(loadingOfficialRegionsByCountry[selectedCountryCode])
     : false;
 
+  useEffect(() => {
+    const controller = new AbortController();
+    const countryCodes = floodZones.map((zone) => zone.countryCode);
+
+    fetchLatestEurostatCountryPopulations(countryCodes, controller.signal)
+      .then((populations) => setCountryPopulations(populations))
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        setCountryPopulations({});
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setCountryPopulationsLoading(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const countryCodes = new Set(floodZones.map((zone) => zone.countryCode));
+
+    fetch("/data/eu-countries-2024.geojson")
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Country boundaries request failed: ${response.status}`);
+        }
+        return response.json() as Promise<OfficialCountryCollection>;
+      })
+      .then((collection) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextBounds = collection.features.reduce<
+          Record<string, [number, number, number, number]>
+        >((accumulator, feature) => {
+          const countryCode = feature.properties.CNTR_ID;
+          if (!countryCodes.has(countryCode)) {
+            return accumulator;
+          }
+
+          const bounds = getGeometryBounds(feature.geometry);
+          if (bounds) {
+            accumulator[countryCode] = bounds;
+          }
+          return accumulator;
+        }, {});
+
+        setCountryBoundsByCode(nextBounds);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCountryBoundsByCode({});
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const officialRegionsLoadedRef = useRef(false);
   useEffect(() => {
     if (officialRegionsLoadedRef.current) return;
@@ -448,9 +542,9 @@ export default function Dashboard() {
                 ? region.geometry.coordinates[0]
                 : region.geometry.coordinates[0]?.[0] ?? [],
             geometry: region.geometry,
-            population: 0,
+            population: null,
             baselineRiskLevel: zone.baselineRiskLevel,
-            estimatedLossEurMillions: 0,
+            estimatedLossEurMillions: null,
             historicalEvents: [],
           }));
 
@@ -472,172 +566,77 @@ export default function Dashboard() {
   }, [zoneSeedsByCountryCode]);
 
   useEffect(() => {
-    if (!selectedRegionId) {
-      return;
-    }
-    if (regionsById.has(selectedRegionId)) {
-      return;
-    }
-    setSelectedRegionId(null);
-  }, [selectedRegionId, regionsById]);
-
-  const selectedEntityFinancials = useMemo(() => {
-    if (selectedRegion) {
-      const fallbackLoss = selectedRegion.estimatedLossEurMillions;
-      const fallbackSavingsPct = selectedZone?.stats.estimatedPlanSavingsPct ?? 30;
-
-      if (activeScenarioId === "generated" && generatedSimulation) {
-        const estimatedLoss =
-          generatedSimulation.projectedLossByRegionEurMillions[selectedRegion.id] ?? fallbackLoss;
-        const estimatedSaved =
-          generatedSimulation.avoidedLossByRegionEurMillions[selectedRegion.id] ??
-          roundToOneDecimal(estimatedLoss * (fallbackSavingsPct / 100));
-        const savingsPct =
-          generatedSimulation.savingsPctByRegion[selectedRegion.id] ?? fallbackSavingsPct;
-        return {
-          estimatedLoss,
-          estimatedSaved,
-          savingsPct,
-          label: `Regional generated estimate (${selectedRegion.name})`,
-        };
-      }
-
-      if (selectedHistoricalScenario) {
-        const zoneHistoricalLoss =
-          selectedZone?.id
-            ? selectedHistoricalScenario.estimatedLossByZoneEurMillions[selectedZone.id]
-            : undefined;
-        const populationShare =
-          selectedZone && selectedZone.stats.populationAtRisk > 0
-            ? selectedRegion.population / selectedZone.stats.populationAtRisk
-            : 0.15;
-        const derivedLoss =
-          zoneHistoricalLoss !== undefined
-            ? roundToOneDecimal(
-              zoneHistoricalLoss *
-              populationShare *
-              (0.82 + (selectedRegion.riskLevel ?? selectedRegion.baselineRiskLevel) / 230),
-            )
-            : fallbackLoss;
-
-        const estimatedLoss =
-          selectedHistoricalScenario.estimatedLossByRegionEurMillions[selectedRegion.id] ??
-          derivedLoss;
-        const savingsPct = clamp(fallbackSavingsPct + 5, 18, 64);
-        const estimatedSaved = roundToOneDecimal(estimatedLoss * (savingsPct / 100));
-        return {
-          estimatedLoss,
-          estimatedSaved,
-          savingsPct,
-          label: `Regional historical estimate (${selectedHistoricalScenario.label})`,
-        };
-      }
-
-      return {
-        estimatedLoss: fallbackLoss,
-        estimatedSaved: roundToOneDecimal(fallbackLoss * (fallbackSavingsPct / 100)),
-        savingsPct: fallbackSavingsPct,
-        label: "Regional baseline estimate",
-      };
-    }
-
     if (!selectedZone) {
-      return null;
+      return undefined;
     }
 
-    const fallbackLoss = selectedZone.stats.estimatedHistoricalLossEurMillions;
-    const fallbackSavingsPct = selectedZone.stats.estimatedPlanSavingsPct;
+    const controller = new AbortController();
+    const selectedGeometry = selectedRegion?.geometry;
+    const selectedBounds =
+      getGeometryBounds(selectedGeometry) ??
+      (!selectedRegion ? countryBoundsByCode[selectedZone.countryCode] ?? null : null);
 
-    if (activeScenarioId === "generated" && generatedSimulation) {
-      const estimatedLoss =
-        generatedSimulation.projectedLossByZoneEurMillions[selectedZone.id] ?? fallbackLoss;
-      const estimatedSaved =
-        generatedSimulation.avoidedLossByZoneEurMillions[selectedZone.id] ??
-        roundToOneDecimal(estimatedLoss * (fallbackSavingsPct / 100));
-      const savingsPct =
-        generatedSimulation.savingsPctByZone[selectedZone.id] ?? fallbackSavingsPct;
-      return {
-        estimatedLoss,
-        estimatedSaved,
-        savingsPct,
-        label: "Country generated estimate",
-      };
-    }
+    fetch(`${ECHOSWARM_API_URL}/api/selected-area/flood-summary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        area_id: selectedRegion?.id ?? selectedZone.id,
+        name: selectedRegion?.name ?? selectedZone.name,
+        country_code: selectedZone.countryCode,
+        bbox: selectedBounds,
+        geometry: selectedGeometry ?? null,
+      }),
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Flood summary request failed: ${response.status}`);
+        }
+        return response.json() as Promise<FloodSummary>;
+      })
+      .then((payload) => {
+        setFloodSummary(payload);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        setFloodSummary({
+          status: "unavailable",
+          source: null,
+          scene_date: null,
+          observed_flood_area_km2: null,
+          polygons_detected: null,
+          message: "No source-backed flood summary is available.",
+        });
+      });
 
-    if (selectedHistoricalScenario) {
-      const estimatedLoss =
-        selectedHistoricalScenario.estimatedLossByZoneEurMillions[selectedZone.id] ?? fallbackLoss;
-      const savingsPct = clamp(fallbackSavingsPct + 4, 18, 60);
-      const estimatedSaved = roundToOneDecimal(estimatedLoss * (savingsPct / 100));
-      return {
-        estimatedLoss,
-        estimatedSaved,
-        savingsPct,
-        label: `Country historical estimate (${selectedHistoricalScenario.label})`,
-      };
-    }
-
-    return {
-      estimatedLoss: fallbackLoss,
-      estimatedSaved: selectedZone.stats.estimatedPlanSavingsEurMillions,
-      savingsPct: fallbackSavingsPct,
-      label: "Country baseline estimate",
+    return () => {
+      controller.abort();
     };
-  }, [selectedRegion, selectedZone, activeScenarioId, generatedSimulation, selectedHistoricalScenario]);
+  }, [countryBoundsByCode, selectedRegion, selectedZone]);
 
-  const contextualHistoricalSimulations = useMemo(() => {
-    if (!selectedZone) {
-      return [];
-    }
+  const selectedEntityFinancials = useMemo(
+    () =>
+      selectedZone
+        ? {
+            estimatedLoss: null,
+            estimatedSaved: null,
+            savingsPct: null,
+            label: "No source-backed financial estimate available",
+          }
+        : null,
+    [selectedZone],
+  );
 
-    return historicalSimulations.map((simulation) => {
-      if (selectedRegion) {
-        const scopedRisk =
-          simulation.riskByRegion[selectedRegion.id] ??
-          deriveHistoricalRegionRisk(simulation.riskByZone[selectedZone.id], selectedRegion) ??
-          selectedRegion.baselineRiskLevel;
-
-        const zoneScenarioLoss =
-          simulation.estimatedLossByZoneEurMillions[selectedZone.id] ??
-          selectedZone.stats.estimatedHistoricalLossEurMillions;
-        const populationShare =
-          selectedZone.stats.populationAtRisk > 0
-            ? selectedRegion.population / selectedZone.stats.populationAtRisk
-            : 0.15;
-        const derivedLoss = roundToOneDecimal(
-          zoneScenarioLoss * populationShare * (0.85 + scopedRisk / 220),
-        );
-
-        const scopedLoss =
-          simulation.estimatedLossByRegionEurMillions[selectedRegion.id] ?? derivedLoss;
-        const historicalRecord = selectedRegion.historicalEvents[0];
-
-        return {
-          simulation,
-          scopedRisk,
-          scopedLoss,
-          historyTitle: historicalRecord
-            ? `${historicalRecord.title} (${formatIncidentDate(historicalRecord.eventDate)})`
-            : `${selectedRegion.name} historical archive`,
-        };
-      }
-
-      const scopedRisk = simulation.riskByZone[selectedZone.id] ?? selectedZone.baselineRiskLevel;
-      const scopedLoss =
-        simulation.estimatedLossByZoneEurMillions[selectedZone.id] ??
-        selectedZone.stats.estimatedHistoricalLossEurMillions;
-      const historicalRecord = selectedZone.majorIncidents[0];
-
-      return {
-        simulation,
-        scopedRisk,
-        scopedLoss,
-        historyTitle: historicalRecord
-          ? `${historicalRecord.title} (${formatIncidentDate(historicalRecord.eventDate)})`
-          : `${selectedZone.name} major flood archive`,
-      };
-    });
-  }, [selectedZone, selectedRegion]);
+  const contextualHistoricalSimulations = useMemo<
+    {
+      simulation: (typeof historicalSimulations)[number];
+      scopedRisk: number;
+      scopedLoss: number | null;
+      historyTitle: string;
+    }[]
+  >(() => [], []);
 
   const activeScenarioLabel = useMemo(() => {
     if (activeScenarioId === "live") {
@@ -731,6 +730,7 @@ export default function Dashboard() {
   const handleZoneSelection = useCallback(
     (zoneId: string | null) => {
       setSelectedZoneId(zoneId);
+      setFloodSummary(null);
       if (zoneId) {
         setSelectedRegionId(null);
         setContextMenuVisible(true);
@@ -746,6 +746,7 @@ export default function Dashboard() {
   const handleRegionSelection = useCallback(
     (regionId: string | null) => {
       setSelectedRegionId(regionId);
+      setFloodSummary(null);
       if (!regionId) {
         return;
       }
@@ -833,25 +834,25 @@ export default function Dashboard() {
     [regionsWithRisk, selectedZone],
   );
 
-  const totalPopulationAtRisk = useMemo(
-    () => floodZones.reduce((sum, zone) => sum + zone.stats.populationAtRisk, 0),
-    [],
-  );
-
-  const successRatePct = useMemo(() => {
-    if (activeScenarioId === "generated" && generatedSimulation) {
-      return clamp(
-        Math.round(
-          ((totalPopulationAtRisk - generatedSimulation.estimatedDisplacement) /
-            totalPopulationAtRisk) *
-            100,
-        ),
-        0,
-        100,
-      );
-    }
-    return selectedEntityFinancials?.savingsPct ?? null;
-  }, [activeScenarioId, generatedSimulation, totalPopulationAtRisk, selectedEntityFinancials]);
+  const selectedInformScore = selectedZone
+    ? informFloodScores2026ByIso2[selectedZone.countryCode]
+    : undefined;
+  const selectedCountryPopulation = selectedCountryCode
+    ? countryPopulations[selectedCountryCode]
+    : undefined;
+  const selectedPopulation = selectedRegion
+    ? selectedRegion.population
+    : selectedCountryPopulation?.value ?? null;
+  const populationCardTitle = selectedRegion ? "Region population" : "Country population";
+  const populationSourceLabel = selectedRegion
+    ? "Source: -"
+    : selectedCountryPopulation
+      ? `Source: ${eurostatPopulationSource.dataset}${
+          selectedCountryPopulation.timePeriod ? ` | ${selectedCountryPopulation.timePeriod}` : ""
+        }`
+      : countryPopulationsLoading
+        ? "Loading Eurostat population..."
+        : "Source: -";
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
@@ -875,7 +876,7 @@ export default function Dashboard() {
             </p>
           </div>
           <h1 className="mt-2 text-xl font-semibold text-slate-100">
-            EU + UK Assessment & Simulation
+            EU Flood Assessment & Simulation
           </h1>
           <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-slate-800/90 px-3 py-1 text-xs text-slate-200">
             <ShieldAlert className="h-3.5 w-3.5 text-cyan-300" />
@@ -899,10 +900,10 @@ export default function Dashboard() {
               ) : null}
               <span
                 className={`mt-3 inline-flex rounded-md px-2 py-1 text-xs font-medium ${getRiskChipClasses(
-                  selectedRegion?.riskLevel ?? selectedZone.riskLevel,
+                  selectedZone.riskLevel,
                 )}`}
               >
-                Risk Score {selectedRegion?.riskLevel ?? selectedZone.riskLevel}
+                Country Risk Score {selectedZone.riskLevel}
               </span>
               <button
                 type="button"
@@ -918,11 +919,47 @@ export default function Dashboard() {
               <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
                 <div className="flex items-center gap-2 text-xs text-slate-300">
                   <Users className="h-3.5 w-3.5 text-cyan-300" />
-                  Population at risk
+                  {populationCardTitle}
                 </div>
                 <p className="mt-2 text-lg font-semibold text-slate-100">
-                  {formatNumber(selectedRegion?.population ?? selectedZone.stats.populationAtRisk)}
+                  {formatNumber(selectedPopulation)}
                 </p>
+                <p className="mt-1 text-[11px] text-slate-400">{populationSourceLabel}</p>
+              </div>
+
+              <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  <ShieldAlert className="h-3.5 w-3.5 text-cyan-300" />
+                  Combined flood score
+                </div>
+                <p className="mt-2 text-lg font-semibold text-slate-100">
+                  {formatScore100(selectedInformScore?.combinedFloodScore100)}
+                </p>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Source: {informRiskDataSource.dataset}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-300">
+                    <Waves className="h-3.5 w-3.5 text-cyan-300" />
+                    River flood
+                  </div>
+                  <p className="mt-2 text-lg font-semibold text-slate-100">
+                    {formatScore(selectedInformScore?.riverFloodScore010, 10)}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-300">
+                    <Waves className="h-3.5 w-3.5 text-cyan-300" />
+                    Coastal flood
+                  </div>
+                  <p className="mt-2 text-lg font-semibold text-slate-100">
+                    {formatScore(selectedInformScore?.coastalFloodScore010, 10)}
+                  </p>
+                </div>
               </div>
 
               <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
@@ -931,18 +968,40 @@ export default function Dashboard() {
                   Average elevation
                 </div>
                 <p className="mt-2 text-lg font-semibold text-slate-100">
-                  {selectedZone.stats.averageElevationM.toFixed(1)} m
+                  {formatMeters(selectedZone.stats.averageElevationM)}
                 </p>
               </div>
 
               <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
                 <div className="flex items-center gap-2 text-xs text-slate-300">
                   <Waves className="h-3.5 w-3.5 text-cyan-300" />
-                  Water volume (est.)
+                  Water volume
                 </div>
                 <p className="mt-2 text-lg font-semibold text-slate-100">
-                  {formatNumber(selectedZone.stats.waterVolumeM3)} m3
+                  {formatCubicMeters(selectedZone.stats.waterVolumeM3)}
                 </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  <Waves className="h-3.5 w-3.5 text-cyan-300" />
+                  Observed flood area
+                </div>
+                <p className="mt-2 text-lg font-semibold text-slate-100">
+                  {formatSquareKilometers(floodSummary?.observed_flood_area_km2)}
+                </p>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Source: {floodSummary?.source ?? "-"}
+                  {floodSummary?.scene_date ? ` | ${floodSummary.scene_date}` : ""}
+                </p>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Status: {floodSummary?.status ?? "loading"}
+                </p>
+                {floodSummary?.message ? (
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                    {floodSummary.message}
+                  </p>
+                ) : null}
               </div>
 
               {selectedEntityFinancials ? (
@@ -964,29 +1023,11 @@ export default function Dashboard() {
                       Estimated avoided loss with simulation plan
                     </div>
                     <p className="mt-2 text-lg font-semibold text-emerald-200">
-                      {selectedEntityFinancials.savingsPct}% (
+                      {formatPercent(selectedEntityFinancials.savingsPct)} (
                       {formatCurrencyMillions(selectedEntityFinancials.estimatedSaved)})
                     </p>
                   </div>
                 </>
-              ) : null}
-
-              {successRatePct !== null ? (
-                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3">
-                  <div className="flex items-center gap-2 text-xs text-slate-300">
-                    <CheckCircle className="h-3.5 w-3.5 text-emerald-300" />
-                    {activeScenarioId === "generated" ? "People protected (global sim)" : "Est. intervention success rate"}
-                  </div>
-                  <p className="mt-2 text-lg font-semibold text-emerald-200">
-                    {successRatePct}%
-                  </p>
-                  {activeScenarioId === "generated" && generatedSimulation ? (
-                    <p className="mt-1 text-[11px] text-slate-400">
-                      {formatNumber(totalPopulationAtRisk - generatedSimulation.estimatedDisplacement)} of{" "}
-                      {formatNumber(totalPopulationAtRisk)} at risk
-                    </p>
-                  ) : null}
-                </div>
               ) : null}
             </div>
 
@@ -1012,11 +1053,16 @@ export default function Dashboard() {
                   >
                     <p className="text-sm text-slate-100">{region.name}</p>
                     <p className="mt-1 text-[11px] text-slate-300">
-                      Risk {region.riskLevel} | Population {formatNumber(region.population)} | Loss{" "}
+                      Country risk {region.riskLevel} | Population {formatNumber(region.population)} | Loss{" "}
                       {formatCurrencyMillions(region.estimatedLossEurMillions)}
                     </p>
                   </button>
                 ))}
+                {selectedZoneRegions.length === 0 ? (
+                  <div className="rounded-md border border-slate-700/80 bg-slate-900/75 px-3 py-2 text-sm text-slate-300">
+                    -
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -1024,21 +1070,27 @@ export default function Dashboard() {
               <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
                 <p className="text-sm font-medium text-slate-100">Historical records for {selectedRegion.name}</p>
                 <div className="mt-2 space-y-2">
-                  {selectedRegion.historicalEvents.map((event) => (
-                    <div
-                      key={event.id}
-                      className="rounded-md border border-slate-700/80 bg-slate-900/75 px-3 py-2"
-                    >
-                      <p className="text-sm text-slate-100">{event.title}</p>
-                      <p className="mt-1 text-[11px] text-slate-300">
-                        {formatIncidentDate(event.eventDate)} | Peak water {event.peakWaterLevelM} m
-                      </p>
-                      <p className="mt-1 text-[11px] text-slate-300">
-                        Loss: {formatCurrencyMillions(event.estimatedLossEurMillions)}
-                      </p>
-                      <p className="mt-1 text-[11px] text-slate-400">{event.summary}</p>
+                  {selectedRegion.historicalEvents.length > 0 ? (
+                    selectedRegion.historicalEvents.map((event) => (
+                      <div
+                        key={event.id}
+                        className="rounded-md border border-slate-700/80 bg-slate-900/75 px-3 py-2"
+                      >
+                        <p className="text-sm text-slate-100">{event.title}</p>
+                        <p className="mt-1 text-[11px] text-slate-300">
+                          {formatIncidentDate(event.eventDate)} | Peak water {event.peakWaterLevelM} m
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-300">
+                          Loss: {formatCurrencyMillions(event.estimatedLossEurMillions)}
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-400">{event.summary}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-md border border-slate-700/80 bg-slate-900/75 px-3 py-2 text-sm text-slate-300">
+                      -
                     </div>
-                  ))}
+                  )}
                 </div>
               </div>
             ) : null}
@@ -1046,22 +1098,28 @@ export default function Dashboard() {
             <div className="rounded-xl border border-slate-700/80 bg-slate-800/70 p-3">
               <p className="text-sm font-medium text-slate-100">Major flood incidents</p>
               <div className="mt-2 space-y-2">
-                {selectedZone.majorIncidents.map((incident) => (
-                  <div
-                    key={incident.id}
-                    className="rounded-md border border-slate-700/80 bg-slate-900/75 px-3 py-2"
-                  >
-                    <p className="text-sm text-slate-100">{incident.title}</p>
-                    <p className="mt-1 text-[11px] text-slate-300">
-                      {formatIncidentDate(incident.eventDate)} | {incident.affectedRegion}
-                    </p>
-                    <p className="mt-1 text-[11px] text-slate-300">
-                      Loss: {formatCurrencyMillions(incident.estimatedLossEurMillions)} | Fatalities:{" "}
-                      {incident.fatalities}
-                    </p>
-                    <p className="mt-1 text-[11px] text-slate-400">{incident.summary}</p>
+                {selectedZone.majorIncidents.length > 0 ? (
+                  selectedZone.majorIncidents.map((incident) => (
+                    <div
+                      key={incident.id}
+                      className="rounded-md border border-slate-700/80 bg-slate-900/75 px-3 py-2"
+                    >
+                      <p className="text-sm text-slate-100">{incident.title}</p>
+                      <p className="mt-1 text-[11px] text-slate-300">
+                        {formatIncidentDate(incident.eventDate)} | {incident.affectedRegion}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-300">
+                        Loss: {formatCurrencyMillions(incident.estimatedLossEurMillions)} | Fatalities:{" "}
+                        {formatNumber(incident.fatalities)}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-400">{incident.summary}</p>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-md border border-slate-700/80 bg-slate-900/75 px-3 py-2 text-sm text-slate-300">
+                    -
                   </div>
-                ))}
+                )}
               </div>
             </div>
 
@@ -1093,6 +1151,11 @@ export default function Dashboard() {
                         {plan}
                       </li>
                     ))}
+                    {selectedZone.emergencyPlans.length === 0 ? (
+                      <li className="rounded-md border border-slate-700/80 bg-slate-900/70 px-3 py-2">
+                        -
+                      </li>
+                    ) : null}
                   </motion.ul>
                 ) : null}
               </AnimatePresence>
@@ -1276,24 +1339,30 @@ export default function Dashboard() {
                   Live feed
                 </button>
                 {selectedZone ? (
-                  contextualHistoricalSimulations.map((item) => (
-                    <button
-                      type="button"
-                      key={item.simulation.id}
-                      className={`w-full rounded-lg border px-3 py-2 text-left text-sm transition ${activeScenarioId === item.simulation.id
-                          ? "border-cyan-400/80 bg-cyan-500/15 text-cyan-100"
-                          : "border-slate-700/80 bg-slate-800/70 text-slate-200 hover:bg-slate-700/80"
-                        }`}
-                      onClick={() => setActiveScenarioId(item.simulation.id)}
-                    >
-                      <p className="font-medium">{item.simulation.label}</p>
-                      <p className="mt-1 text-xs text-slate-300">{item.simulation.notes}</p>
-                      <p className="mt-1 text-xs text-cyan-200">
-                        Risk {item.scopedRisk} | Est. loss {formatCurrencyMillions(item.scopedLoss)}
-                      </p>
-                      <p className="mt-1 text-[11px] text-slate-400">{item.historyTitle}</p>
-                    </button>
-                  ))
+                  contextualHistoricalSimulations.length > 0 ? (
+                    contextualHistoricalSimulations.map((item) => (
+                      <button
+                        type="button"
+                        key={item.simulation.id}
+                        className={`w-full rounded-lg border px-3 py-2 text-left text-sm transition ${activeScenarioId === item.simulation.id
+                            ? "border-cyan-400/80 bg-cyan-500/15 text-cyan-100"
+                            : "border-slate-700/80 bg-slate-800/70 text-slate-200 hover:bg-slate-700/80"
+                          }`}
+                        onClick={() => setActiveScenarioId(item.simulation.id)}
+                      >
+                        <p className="font-medium">{item.simulation.label}</p>
+                        <p className="mt-1 text-xs text-slate-300">{item.simulation.notes}</p>
+                        <p className="mt-1 text-xs text-cyan-200">
+                          Risk {item.scopedRisk} | Est. loss {formatCurrencyMillions(item.scopedLoss)}
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-400">{item.historyTitle}</p>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="rounded-lg border border-slate-700/80 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                      -
+                    </div>
+                  )
                 ) : (
                   <div className="rounded-lg border border-slate-700/80 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
                     Select a country or region to load historical records for that specific area.
@@ -1351,13 +1420,13 @@ export default function Dashboard() {
                     <p>
                       Estimated displacement:{" "}
                       <span className="font-semibold text-slate-100">
-                        {formatNumber(generatedSimulation.estimatedDisplacement)} people
+                        {formatUnit(generatedSimulation.estimatedDisplacement, "people")}
                       </span>
                     </p>
                     <p className="mt-2">
                       Predicted response time:{" "}
                       <span className="font-semibold text-slate-100">
-                        {generatedSimulation.responseTimeMinutes} minutes
+                        {formatUnit(generatedSimulation.responseTimeMinutes, "minutes")}
                       </span>
                     </p>
                     {selectedRegion ? (
@@ -1365,8 +1434,7 @@ export default function Dashboard() {
                         Estimated avoided loss ({selectedRegion.name}):{" "}
                         <span className="font-semibold text-emerald-200">
                           {formatCurrencyMillions(
-                            generatedSimulation.avoidedLossByRegionEurMillions[selectedRegion.id] ??
-                            0,
+                            generatedSimulation.avoidedLossByRegionEurMillions[selectedRegion.id],
                           )}
                         </span>
                       </p>
@@ -1375,7 +1443,7 @@ export default function Dashboard() {
                         Estimated avoided loss ({selectedZone.name}):{" "}
                         <span className="font-semibold text-emerald-200">
                           {formatCurrencyMillions(
-                            generatedSimulation.avoidedLossByZoneEurMillions[selectedZone.id] ?? 0,
+                            generatedSimulation.avoidedLossByZoneEurMillions[selectedZone.id],
                           )}
                         </span>
                       </p>

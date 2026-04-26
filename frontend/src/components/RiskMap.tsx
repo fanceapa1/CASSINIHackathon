@@ -104,6 +104,25 @@ const COUNTRY_ZOOM_DURATION_MS = 1250;
 const REGION_ZOOM_DURATION_MS = 900;
 const WORLD_RETURN_DURATION_MS = 1050;
 
+type CountryLabelBucket = "large" | "medium" | "small" | "tiny";
+
+const BASEMAP_COUNTRY_LABEL_LAYER_IDS = [
+  "place_country_1",
+  "place_country_2",
+  "place_state",
+];
+
+const COUNTRY_LABEL_LAYER_CONFIGS: Array<{
+  id: string;
+  bucket: CountryLabelBucket;
+  minzoom: number;
+}> = [
+  { id: "eu-country-labels-large", bucket: "large", minzoom: 2.8 },
+  { id: "eu-country-labels-medium", bucket: "medium", minzoom: 3.9 },
+  { id: "eu-country-labels-small", bucket: "small", minzoom: 5.0 },
+  { id: "eu-country-labels-tiny", bucket: "tiny", minzoom: 6.1 },
+];
+
 const RISK_FILL_COLOR_EXPRESSION = [
   "interpolate",
   ["linear"],
@@ -123,6 +142,64 @@ const TEST_PINPOINTS = [
   { id: 'rome', location: [12.4964, 41.9028] as [number, number], countryCode: 'IT', title: 'Rome Simulation', details: 'Historical flood scenario of the Tiber river affecting the historic center. Water level peaked at 1.8m above normal.' },
   { id: 'cluj', location: [23.5914, 46.7712] as [number, number], countryCode: 'RO', title: 'Cluj Simulation', details: 'Simulation of flash floods near Someșul Mic catching nearby residential zones.' }
 ];
+
+function hideBasemapCountryLabels(map: maplibregl.Map): void {
+  BASEMAP_COUNTRY_LABEL_LAYER_IDS.forEach((layerId) => {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, "visibility", "none");
+    }
+  });
+}
+
+function getCountryLabelLayer(
+  id: string,
+  bucket: CountryLabelBucket,
+  minzoom: number,
+): LayerProps {
+  const baseSize = bucket === "large" ? 9 : bucket === "medium" ? 8 : 7;
+
+  return {
+    id,
+    type: "symbol",
+    minzoom,
+    filter: ["==", ["get", "labelBucket"], bucket] as unknown as never,
+    layout: {
+      "symbol-placement": "point",
+      "text-field": ["get", "name"] as unknown as never,
+      "text-font": ["Montserrat Medium", "Open Sans Bold", "Noto Sans Regular"],
+      "text-size": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        minzoom,
+        baseSize,
+        5.8,
+        baseSize + 1,
+        7.2,
+        baseSize + 2,
+      ] as unknown as never,
+      "text-transform": "uppercase",
+      "text-max-width": bucket === "large" ? 9 : bucket === "medium" ? 7 : 5,
+      "text-padding": 10,
+      "text-allow-overlap": false,
+      "text-ignore-placement": false,
+    },
+    paint: {
+      "text-color": "rgba(226, 232, 240, 0.88)",
+      "text-halo-color": "rgba(2, 6, 23, 0.92)",
+      "text-halo-width": 1.1,
+      "text-opacity": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        minzoom,
+        0,
+        minzoom + 0.35,
+        1,
+      ] as unknown as never,
+    },
+  };
+}
 
 function createEmptyFeatureCollection(): MapFeatureCollection {
   return {
@@ -325,6 +402,34 @@ function computeGeometryBbox(
   return [minLng, minLat, maxLng, maxLat];
 }
 
+function getCountryLabelBucket(
+  geometry: { type: string; coordinates: unknown },
+  label: string,
+): CountryLabelBucket {
+  const bbox = computeGeometryBbox(geometry);
+  if (!bbox) {
+    return "tiny";
+  }
+
+  const [minLng, minLat, maxLng, maxLat] = bbox;
+  const width = Math.max(0, maxLng - minLng);
+  const height = Math.max(0, maxLat - minLat);
+  const areaScore = width * height;
+  const namePenalty = Math.max(0, label.length - 8) * 2.2;
+  const fitScore = areaScore - namePenalty;
+
+  if (fitScore >= 54) {
+    return "large";
+  }
+  if (fitScore >= 18) {
+    return "medium";
+  }
+  if (fitScore >= 5) {
+    return "small";
+  }
+  return "tiny";
+}
+
 function normalizeLookupText(value: string): string {
   return value
     .normalize("NFD")
@@ -461,6 +566,7 @@ export function RiskMap({
             countryCode: zone.countryCode,
             name: zone.name,
             riskLevel: zone.riskLevel,
+            labelBucket: getCountryLabelBucket(feature.geometry, zone.name),
             source: "GISCO CNTR_RG_20M_2024_4326",
           },
           geometry: feature.geometry,
@@ -472,7 +578,6 @@ export function RiskMap({
       .filter(
         (zone) =>
           !matchedCountryCodes.has(zone.countryCode) &&
-          zone.countryCode !== "UK" &&
           Array.isArray(zone.polygon) &&
           zone.polygon.length >= 3,
       )
@@ -483,6 +588,13 @@ export function RiskMap({
           countryCode: zone.countryCode,
           name: zone.name,
           riskLevel: zone.riskLevel,
+          labelBucket: getCountryLabelBucket(
+            {
+              type: "Polygon",
+              coordinates: [closePolygonRing(zone.polygon as [number, number][])],
+            },
+            zone.name,
+          ),
           source: "fallback-unmatched",
         },
         geometry: {
@@ -509,6 +621,13 @@ export function RiskMap({
             countryCode: zone.countryCode,
             name: zone.name,
             riskLevel: zone.riskLevel,
+            labelBucket: getCountryLabelBucket(
+              {
+                type: "Polygon",
+                coordinates: [closePolygonRing(zone.polygon as [number, number][])],
+              },
+              zone.name,
+            ),
             source: "fallback",
           },
           geometry: {
@@ -1142,7 +1261,10 @@ export function RiskMap({
           mapStyle={BASE_MAP_STYLE}
           projection="mercator"
           {...viewState}
-          onLoad={() => setMapReady(true)}
+          onLoad={(event) => {
+            hideBasemapCountryLabels(event.target);
+            setMapReady(true);
+          }}
           interactiveLayerIds={interactiveLayerIds}
           onClick={handleMapClick}
           onMouseMove={handleMapMouseMove}
@@ -1208,6 +1330,18 @@ export function RiskMap({
           <Source id="world-risk-zones" type="geojson" data={zonesGeoJson as never}>
             <Layer {...getWorldCountryFillLayer(hoveredCountryId, selectedZoneId)} />
             <Layer {...getWorldCountryOutlineLayer(hoveredCountryId, selectedZoneId)} />
+            {!selectedZoneId
+              ? COUNTRY_LABEL_LAYER_CONFIGS.map((layerConfig) => (
+                  <Layer
+                    key={layerConfig.id}
+                    {...getCountryLabelLayer(
+                      layerConfig.id,
+                      layerConfig.bucket,
+                      layerConfig.minzoom,
+                    )}
+                  />
+                ))
+              : null}
           </Source>
 
           <Source id="inverted-mask" type="geojson" data={invertedMaskGeoJson as never}>

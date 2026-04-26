@@ -67,7 +67,8 @@ from neo4j import GraphDatabase
 from neo4j.exceptions import ServiceUnavailable
 from pydantic import BaseModel
 from shapely import unary_union
-from shapely.geometry import MultiPolygon
+from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import box as shapely_box
 
 load_dotenv()
 
@@ -143,6 +144,17 @@ class MapRefreshRequest(BaseModel):
     bbox: list[float]
     date: str = "2024-10-30"
     flood_event_id: str = "dynamic_refresh"
+    threshold_db: float = -18.0
+
+
+class SelectedAreaFloodSummaryRequest(BaseModel):
+    area_id: str
+    name: str
+    country_code: str
+    # [min_lon, min_lat, max_lon, max_lat] WGS-84. Missing means no source-backed AOI.
+    bbox: list[float] | None = None
+    geometry: dict | None = None
+    date: str = "2024-10-30"
     threshold_db: float = -18.0
 
 
@@ -266,6 +278,70 @@ def _build_demo_map_refresh_response(body: MapRefreshRequest) -> dict:
         "polygons_detected": 2,
         "edges_blocked": topology["stats"]["flooded_edges"],
     }
+
+
+def _unavailable_flood_summary(message: str) -> dict:
+    return {
+        "status": "unavailable",
+        "source": None,
+        "scene_date": None,
+        "observed_flood_area_km2": None,
+        "polygons_detected": None,
+        "message": message,
+    }
+
+
+def _coerce_bbox(value: list[float] | None) -> tuple[float, float, float, float] | None:
+    if not value or len(value) != 4:
+        return None
+
+    try:
+        min_lon, min_lat, max_lon, max_lat = (float(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+
+    if not all(math.isfinite(item) for item in (min_lon, min_lat, max_lon, max_lat)):
+        return None
+    if min_lon >= max_lon or min_lat >= max_lat:
+        return None
+
+    return min_lon, min_lat, max_lon, max_lat
+
+
+def _bbox_intersects(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> bool:
+    return shapely_box(*left).intersects(shapely_box(*right))
+
+
+def _flood_area_km2(
+    polygons: list[Polygon | MultiPolygon],
+    bbox: tuple[float, float, float, float],
+) -> float:
+    if not polygons:
+        return 0.0
+
+    aoi = shapely_box(*bbox)
+    clipped = [polygon.intersection(aoi) for polygon in polygons if not polygon.is_empty]
+    clipped = [polygon for polygon in clipped if not polygon.is_empty]
+    if not clipped:
+        return 0.0
+
+    try:
+        from pyproj import Geod
+
+        geod = Geod(ellps="WGS84")
+        area_m2, _ = geod.geometry_area_perimeter(unary_union(clipped))
+        return round(abs(area_m2) / 1_000_000, 3)
+    except Exception:
+        # Fall back to an approximate local conversion if pyproj cannot compute
+        # geodesic area for a repaired geometry.
+        min_lon, min_lat, max_lon, max_lat = bbox
+        mid_lat = math.radians((min_lat + max_lat) / 2)
+        km_per_lon_degree = max(0.001, 111.32 * math.cos(mid_lat))
+        km_per_lat_degree = 111.32
+        return round(unary_union(clipped).area * km_per_lon_degree * km_per_lat_degree, 3)
 
 
 def _build_demo_payload(
@@ -838,6 +914,74 @@ async def satellite_refresh(body: SatelliteRefreshRequest) -> dict:
             }
         finally:
             driver.close()
+
+    return await loop.run_in_executor(None, _run)
+
+
+@app.post("/api/selected-area/flood-summary")
+async def selected_area_flood_summary(body: SelectedAreaFloodSummaryRequest) -> dict:
+    """
+    Return source-backed observed flood extent for a selected EU area.
+
+    This endpoint is intentionally read-only. It does not mutate the Neo4j graph
+    and it never fabricates region metrics: unsupported areas return nullable
+    fields with status="unavailable".
+    """
+    bbox = _coerce_bbox(body.bbox)
+    if bbox is None:
+        return _unavailable_flood_summary(
+            "No administrative geometry was provided for this area, so no "
+            "source-backed flood extent can be computed."
+        )
+
+    loop = asyncio.get_running_loop()
+
+    def _run() -> dict:
+        if _cfg.CDSE_CLIENT_ID and _cfg.CDSE_CLIENT_SECRET:
+            try:
+                polygons = get_flooded_sectors_live(
+                    bbox=bbox,
+                    target_date=body.date,
+                    client_id=_cfg.CDSE_CLIENT_ID,
+                    client_secret=_cfg.CDSE_CLIENT_SECRET,
+                    threshold_db=body.threshold_db,
+                )
+                return {
+                    "status": "live",
+                    "source": "sentinel-1-cdse",
+                    "scene_date": body.date,
+                    "observed_flood_area_km2": _flood_area_km2(polygons, bbox),
+                    "polygons_detected": len(polygons),
+                    "message": (
+                        "Observed flood extent computed from Copernicus Data "
+                        "Space Sentinel-1 processing."
+                    ),
+                }
+            except CDSEUnavailableError as exc:
+                _log.warning("Selected-area CDSE summary unavailable: %s", exc)
+
+        if not _bbox_intersects(bbox, _cfg.VALENCIA_BBOX):
+            return _unavailable_flood_summary(
+                "No CDSE credentials are configured and the selected area does "
+                "not overlap the local Valencia EMSR773 fallback."
+            )
+
+        try:
+            polygons = get_flooded_sectors(source="local")
+        except FileNotFoundError as exc:
+            _log.warning("Selected-area local EMS summary unavailable: %s", exc)
+            return _unavailable_flood_summary(
+                "Local Copernicus EMSR773 fallback data is not available on disk."
+            )
+
+        return {
+            "status": "fallback",
+            "source": "copernicus-emsr773-local",
+            "scene_date": "2024-10-30",
+            "observed_flood_area_km2": _flood_area_km2(polygons, bbox),
+            "polygons_detected": len(polygons),
+            "message": "Observed flood extent computed from local Copernicus EMSR773 Valencia data.",
+        }
 
     return await loop.run_in_executor(None, _run)
 

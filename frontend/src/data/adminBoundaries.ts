@@ -55,7 +55,6 @@ const iso2ToIso3: Record<string, string> = {
   SI: "SVN",
   ES: "ESP",
   SE: "SWE",
-  UK: "GBR",
 };
 
 const boundaryCache = new globalThis.Map<string, Promise<AdminBoundaryRegion[]>>();
