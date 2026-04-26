@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import maplibregl, { type StyleSpecification } from "maplibre-gl";
+import maplibregl from "maplibre-gl";
 import Map, { Layer, Marker, Popup, NavigationControl, Source } from "react-map-gl/maplibre";
 import { Globe2, Search, X } from "lucide-react";
 import type { FormEvent } from "react";
@@ -90,11 +90,6 @@ type PendingSelection =
   | null;
 
 const BASE_MAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
-const TRANSPARENT_MAP_STYLE: StyleSpecification = {
-  version: 8,
-  sources: {},
-  layers: [],
-};
 
 const EUROPE_MAP_VIEW: ViewState = {
   longitude: 15.5,
@@ -148,46 +143,24 @@ function toControlledViewState(nextViewState: ViewState): ViewState {
   };
 }
 
-function getBackgroundCountryFillLayer(): LayerProps {
-  return {
-    id: "background-country-fill",
-    type: "fill",
-    paint: {
-      "fill-color": RISK_FILL_COLOR_EXPRESSION,
-      "fill-opacity": 0.22,
-    },
-  };
-}
-
-function getBackgroundCountryOutlineLayer(isFocused: boolean): LayerProps {
-  return {
-    id: "background-country-outline",
-    type: "line",
-    paint: {
-      "line-color": "rgba(226, 232, 240, 0.46)",
-      "line-width": 1.2,
-      "line-opacity": isFocused ? 0 : 0.82,
-    },
-  };
-}
-
-function getWorldCountryFillLayer(hoveredCountryId: string | null): LayerProps {
+function getWorldCountryFillLayer(hoveredCountryId: string | null, selectedZoneId: string | null): LayerProps {
   return {
     id: "world-country-hit",
     type: "fill",
     paint: {
       "fill-color": RISK_FILL_COLOR_EXPRESSION,
-      "fill-opacity": [
+      "fill-opacity": selectedZoneId ? 0 : [
         "case",
         ["==", ["get", "id"], hoveredCountryId ?? ""],
         0.38,
         0.22,
       ] as unknown as never,
+      "fill-opacity-transition": { duration: 800 } as any,
     },
   };
 }
 
-function getWorldCountryOutlineLayer(hoveredCountryId: string | null): LayerProps {
+function getWorldCountryOutlineLayer(hoveredCountryId: string | null, selectedZoneId: string | null): LayerProps {
   return {
     id: "world-country-outline",
     type: "line",
@@ -204,17 +177,8 @@ function getWorldCountryOutlineLayer(hoveredCountryId: string | null): LayerProp
         2.4,
         1.5,
       ] as unknown as never,
-    },
-  };
-}
-
-function getSelectedCountryFillLayer(phase: MapInteractionPhase): LayerProps {
-  return {
-    id: "selected-country-fill",
-    type: "fill",
-    paint: {
-      "fill-color": "rgba(15, 23, 42, 0.18)",
-      "fill-opacity": phase === "countryZooming" ? 0.34 : 0.24,
+      "line-opacity": selectedZoneId ? 0.15 : 1,
+      "line-opacity-transition": { duration: 800 } as any,
     },
   };
 }
@@ -336,6 +300,17 @@ function computeGeometryBbox(
     if (first) rings = [first];
   } else if (geometry.type === "MultiPolygon") {
     rings = (geometry.coordinates as [number, number][][][]).map((poly) => poly[0]).filter(Boolean);
+    if (rings.length > 1) {
+      let maxPoints = 0;
+      let largestRing = rings[0];
+      for (const ring of rings) {
+        if (ring.length > maxPoints) {
+          maxPoints = ring.length;
+          largestRing = ring;
+        }
+      }
+      rings = largestRing ? [largestRing] : [];
+    }
   }
   if (rings.length === 0) return null;
   let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
@@ -403,6 +378,7 @@ export function RiskMap({
   const focusTimeoutRef = useRef<number | null>(null);
   const activeZoneIdRef = useRef<string | null>(null);
   const activeRegionIdRef = useRef<string | null>(null);
+  const previousZoneFeatureRef = useRef<MapFeature | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -467,6 +443,7 @@ export function RiskMap({
 
   const zonesGeoJson = useMemo<MapFeatureCollection>(() => {
     const byCountryCode = new globalThis.Map(zones.map((zone) => [zone.countryCode, zone]));
+    
     const officialFeatures = officialCountries?.features ?? [];
     const matchedCountryCodes = new Set<string>();
 
@@ -623,6 +600,50 @@ export function RiskMap({
         : createEmptyFeatureCollection(),
     [selectedZoneFeature],
   );
+
+  useEffect(() => {
+    if (selectedZoneFeature) {
+      previousZoneFeatureRef.current = selectedZoneFeature;
+    }
+  }, [selectedZoneFeature]);
+  
+  const maskFeature = selectedZoneFeature || previousZoneFeatureRef.current;
+  
+  const invertedMaskGeoJson = useMemo<MapFeatureCollection>(() => {
+    if (!maskFeature) return createEmptyFeatureCollection();
+
+    const earthRing: [number, number][] = [
+      [-180, 90],
+      [180, 90],
+      [180, -90],
+      [-180, -90],
+      [-180, 90],
+    ];
+
+    const holes: [number, number][][] = [];
+    const geom = maskFeature.geometry;
+    if (geom.type === "Polygon") {
+      holes.push(...(geom.coordinates as [number, number][][]));
+    } else if (geom.type === "MultiPolygon") {
+      (geom.coordinates as [number, number][][][]).forEach((poly) => {
+        holes.push(...poly);
+      });
+    }
+
+    return {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [earthRing, ...holes], // Outer ring, then holes
+          },
+        },
+      ],
+    };
+  }, [maskFeature]);
 
   const visibleRegionsGeoJson = useMemo<MapFeatureCollection>(
     () =>
@@ -1112,37 +1133,13 @@ export function RiskMap({
   const shouldRevealRegions = Boolean(selectedZoneId) && phase !== "world" && phase !== "countryZooming";
   const hasVisibleRegions = visibleRegionsGeoJson.features.length > 0;
 
-  const backgroundMapClasses = selectedZoneId
-    ? phase === "countryZooming"
-      ? "scale-[1.03] blur-md saturate-[0.72] opacity-70"
-      : "scale-[1.015] blur-[2px] saturate-[0.8] opacity-76"
-    : "scale-100 blur-0 saturate-100 opacity-100";
-
   return (
     <div className="relative h-full w-full overflow-hidden bg-slate-950">
-      <div
-        className={`pointer-events-none absolute inset-0 transition duration-700 ease-out ${backgroundMapClasses}`}
-      >
-        <Map
-          mapLib={maplibregl}
-          mapStyle={BASE_MAP_STYLE}
-          projection="mercator"
-          {...viewState}
-          interactive={false}
-          attributionControl={false}
-        >
-          <Source id="background-risk-zones" type="geojson" data={zonesGeoJson as never}>
-            <Layer {...getBackgroundCountryFillLayer()} />
-            <Layer {...getBackgroundCountryOutlineLayer(Boolean(selectedZoneId))} />
-          </Source>
-        </Map>
-      </div>
-
       <div className="absolute inset-0">
         <Map
           ref={mapRef}
           mapLib={maplibregl}
-          mapStyle={TRANSPARENT_MAP_STYLE}
+          mapStyle={BASE_MAP_STYLE}
           projection="mercator"
           {...viewState}
           onLoad={() => setMapReady(true)}
@@ -1155,6 +1152,30 @@ export function RiskMap({
           }}
           onMove={(event) => {
             setViewState(toControlledViewState(event.viewState));
+            
+            if (!selectedZoneId && event.viewState.zoom >= 5.6 && (event as any).originalEvent) {
+              const bounds = mapRef.current?.getMap().getContainer().getBoundingClientRect();
+              if (bounds) {
+                const x = bounds.width / 2;
+                const y = bounds.height / 2;
+                const features = mapRef.current?.queryRenderedFeatures([x, y], { layers: ["world-country-hit"] });
+                if (features && features.length > 0) {
+                  const countryId = features[0].properties?.id;
+                  if (typeof countryId === "string") {
+                    onSelectZone(countryId);
+                  }
+                }
+              }
+            }
+
+            if (selectedZoneId && event.viewState.zoom <= 3.8 && (event as any).originalEvent) {
+              onSelectZone(null);
+              onSelectRegion(null);
+              setSearchQuery("");
+              setShowSuggestions(false);
+              setSelectedPinId(null);
+            }
+
             if (selectedZoneId) {
               queueFocusAnchorUpdate();
             }
@@ -1168,16 +1189,41 @@ export function RiskMap({
         >
           <NavigationControl position="top-right" />
 
-          {!selectedZoneId ? (
-            <Source id="world-risk-zones" type="geojson" data={zonesGeoJson as never}>
-              <Layer {...getWorldCountryFillLayer(hoveredCountryId)} />
-              <Layer {...getWorldCountryOutlineLayer(hoveredCountryId)} />
-            </Source>
-          ) : null}
+          <Source 
+            id="esri-satellite" 
+            type="raster" 
+            tiles={["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]} 
+            tileSize={256}
+          >
+            <Layer 
+              id="satellite-layer" 
+              type="raster" 
+              paint={{ 
+                "raster-opacity": selectedZoneId ? 1 : 0, 
+                "raster-opacity-transition": { duration: 1000 } as any
+              }} 
+            />
+          </Source>
 
-          {selectedZoneId ? (
+          <Source id="world-risk-zones" type="geojson" data={zonesGeoJson as never}>
+            <Layer {...getWorldCountryFillLayer(hoveredCountryId, selectedZoneId)} />
+            <Layer {...getWorldCountryOutlineLayer(hoveredCountryId, selectedZoneId)} />
+          </Source>
+
+          <Source id="inverted-mask" type="geojson" data={invertedMaskGeoJson as never}>
+            <Layer
+              id="inverted-mask-fill"
+              type="fill"
+              paint={{
+                "fill-color": "#09090b", 
+                "fill-opacity": selectedZoneId ? 0.78 : 0,
+                "fill-opacity-transition": { duration: 800 } as any
+              }}
+            />
+          </Source>
+
+          {selectedZoneId && selectedZoneGeoJson ? (
             <Source id="selected-risk-zone" type="geojson" data={selectedZoneGeoJson as never}>
-              <Layer {...getSelectedCountryFillLayer(phase)} />
               <Layer {...selectedCountryOutlineLayer} />
               <Layer {...selectedCountryHitLayer} />
             </Source>
@@ -1323,18 +1369,18 @@ export function RiskMap({
             </div>
           ) : null}
         </form>
-
-        {selectedZoneId ? (
-          <button
-            type="button"
-            onClick={returnToWorld}
-            className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-600/75 bg-slate-900/90 px-3 py-2 text-xs font-medium text-slate-100 shadow-lg backdrop-blur-md transition hover:bg-slate-800"
-          >
-            <Globe2 className="h-3.5 w-3.5 text-cyan-300" />
-            Return to world map
-          </button>
-        ) : null}
       </div>
+
+      {selectedZoneId ? (
+        <button
+          type="button"
+          onClick={returnToWorld}
+          className="absolute bottom-6 left-6 z-20 inline-flex items-center gap-2 rounded-lg border border-slate-600/75 bg-slate-900/90 px-4 py-2.5 text-sm font-medium text-slate-100 shadow-lg backdrop-blur-md transition hover:bg-slate-800/90"
+        >
+          <Globe2 className="h-4 w-4 text-cyan-300" />
+          Return to world map
+        </button>
+      ) : null}
     </div>
   );
 }
